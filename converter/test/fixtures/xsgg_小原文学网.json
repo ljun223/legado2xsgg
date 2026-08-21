@@ -1,0 +1,98 @@
+{
+  "小原文学网": {
+    "chapterContent": {
+      "validConfig": "",
+      "content": "//div[contains(@id,\"booktxt\")]//text()",
+      "actionID": "chapterContent",
+      "host": "https://www.min-yuan.com",
+      "responseFormatType": "html",
+      "parserID": "DOM",
+      "nextPageUrl": "//*[contains(text(),\"下一页\")]/@href"
+    },
+    "enable": "1",
+    "shupingList": {
+      "actionID": "shupingList",
+      "parserID": "DOM"
+    },
+    "bookDetail": {
+      "validConfig": "",
+      "actionID": "bookDetail",
+      "lastChapterTitle": "//div[contains(@class,\"hiden-xs\")]/text()",
+      "host": "https://www.min-yuan.com",
+      "cat": "//*[contains(@class,\"sort\")]/text()\n@js:result.replace(\"类别：\",\"\")",
+      "cover": "//*[contains(@id,\"fmimg\")]/img/@data-original",
+      "responseFormatType": "html",
+      "desc": "//*[contains(@id,\"intro\")]/text()",
+      "parserID": "DOM"
+    },
+    "shudanList": {},
+    "bookWorld": {
+      "分类": {
+        "author": "//dl/div/text()",
+        "lastChapterTitle": "//em[2]/text()",
+        "responseFormatType": "html",
+        "bookName": "//dt/a/@title",
+        "desc": "//dd/text()",
+        "requestInfo": "@js:\nlet {_type}=params.filters\nlet url=`/${_type}/${params.pageIndex}.html`;\n\nreturn {url:url}",
+        "host": "https://www.min-yuan.com",
+        "actionID": "bookWorld",
+        "moreKeys": {
+          "pageSize": 20,
+          "requestFilters": "_type\n玄幻小说::xuanhuan\n武侠小说::wuxia\n都市小说::dushi\n历史小说::lishi\n科幻小说::kehuan\n游戏小说::youxi\n女生小说::nvsheng\n其他小说::qita"
+        },
+        "wordCount": "//em[1]/text()",
+        "cover": "//img/@data-original",
+        "list": "//div[contains(@class,\"item\")]",
+        "_sIndex": 0,
+        "parserID": "DOM",
+        "detailUrl": "//dt/a/@href",
+        "validConfig": ""
+      }
+    },
+    "sourceUrl": "https://www.min-yuan.com",
+    "relatedWord": {
+      "actionID": "relatedWord",
+      "parserID": "DOM"
+    },
+    "weight": "9999",
+    "sourceName": "小原文学网",
+    "miniAppVersion": "2.53.2",
+    "shudanDetail": {
+      "actionID": "shudanDetail",
+      "parserID": "DOM"
+    },
+    "lastModifyTime": "1786865368.928498",
+    "shupingHome": {
+      "actionID": "shupingHome",
+      "parserID": "DOM"
+    },
+    "searchShudan": {
+      "actionID": "searchShudan",
+      "parserID": "DOM"
+    },
+    "searchBook": {
+      "cat": "//em[contains(@class,\"orange\")]/text()",
+      "responseFormatType": "html",
+      "bookName": "//dt/a/text()",
+      "requestInfo": "https://www.min-yuan.com/search?searchkey=%@keyWord",
+      "host": "https://www.min-yuan.com",
+      "actionID": "searchBook",
+      "detailUrl": "//dt/a/@href",
+      "cover": "//img/@src",
+      "validConfig": "",
+      "list": "//div[contains(@class,\"item\")]",
+      "parserID": "DOM",
+      "status": "//em[contains(@class,\"blue\")]/text()"
+    },
+    "chapterList": {
+      "validConfig": "",
+      "actionID": "chapterList",
+      "title": "//a/text()",
+      "host": "https://www.min-yuan.com",
+      "list": "//*[contains(@id,\"newlist\")]/dd",
+      "responseFormatType": "html",
+      "parserID": "DOM",
+      "url": "//a/@href"
+    }
+  }
+}

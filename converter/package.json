@@ -1,0 +1,13 @@
+{
+  "name": "legado2xsgg",
+  "version": "0.1.0",
+  "description": "开源阅读(Legado)书源 → 香色闺阁(XSGG)书源转换器，核心零依赖，可运行于 Node / 浏览器 / WebView",
+  "main": "lib/index.js",
+  "bin": {
+    "legado2xsgg": "cli.js"
+  },
+  "scripts": {
+    "test": "node test/run.js && node test/units.js"
+  },
+  "license": "MIT"
+}
