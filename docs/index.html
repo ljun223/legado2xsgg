@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Legado2XSGG · 开源阅读书源一键转换</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #F8FAFC; color: #1E293B; min-height: 100vh; }
+  header { background: linear-gradient(135deg, #4F46E5, #6D28D9); color: #fff; padding: 22px 20px; }
+  header .wrap { max-width: 960px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  header h1 { font-size: 21px; }
+  header p { font-size: 12px; opacity: .85; margin-top: 4px; }
+  header a { color: #fff; text-decoration: none; font-size: 13px; border: 1px solid rgba(255,255,255,.45); border-radius: 18px; padding: 6px 14px; }
+  main { max-width: 960px; margin: 0 auto; padding: 18px 16px 40px; }
+  .card { background: #fff; border: 1px solid #E2E8F0; border-radius: 14px; padding: 18px; margin-top: 16px; box-shadow: 0 1px 3px rgba(15,23,42,.05); }
+  .card h2 { font-size: 15px; color: #4338CA; margin-bottom: 4px; }
+  .card .desc { font-size: 12px; color: #94A3B8; margin-bottom: 12px; line-height: 1.7; }
+  textarea { width: 100%; min-height: 150px; border: 1px solid #CBD5E1; border-radius: 10px; padding: 10px 12px; font-size: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; resize: vertical; outline: none; }
+  textarea:focus { border-color: #818CF8; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+  button { border: none; cursor: pointer; border-radius: 20px; font-size: 13px; padding: 9px 18px; transition: filter .15s; }
+  button:hover { filter: brightness(.95); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .primary { background: #4F46E5; color: #fff; }
+  .secondary { background: #EEF2FF; color: #4338CA; }
+  .danger { background: #fff; color: #DC2626; border: 1.5px solid #FCA5A5; }
+  .ghost { background: transparent; color: #64748B; }
+  .warnbox { display: none; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 10px; padding: 10px 12px; margin-top: 12px; font-size: 12px; line-height: 1.9; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  .warnbox .red { color: #DC2626; }
+  .status { font-size: 12px; margin-top: 10px; color: #475569; min-height: 16px; }
+  .status.ok::before { content: "✓ "; color: #16A34A; }
+  .status.err::before { content: "✗ "; color: #DC2626; }
+  details { margin-top: 8px; font-size: 12px; color: #64748B; }
+  footer { text-align: center; font-size: 11px; color: #94A3B8; padding: 18px; line-height: 1.9; }
+  footer a { color: #6366F1; text-decoration: none; }
+  input[type=file] { display: none; }
+  @media (max-width: 600px) { header h1 { font-size: 18px; } .card { padding: 14px; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div>
+      <h1>Legado2XSGG</h1>
+      <p>开源阅读书源 → 香色闺阁书源 · 纯前端转换，数据不出浏览器</p>
+    </div>
+    <a href="https://github.com/ljun223/legado2xsgg" target="_blank">GitHub / APK 下载</a>
+  </div>
+</header>
+
+<main>
+  <!-- 书源转换 -->
+  <div class="card">
+    <h2>开源阅读书源一键转换</h2>
+    <div class="desc">
+      粘贴或上传「开源阅读」书源 JSON（支持数组、单对象、{"0":{...}} 导出格式），转换为香色闺阁格式。
+      转换完全在本地浏览器完成；<span style="color:#DC2626">红色提示</span>为需人工核对项。
+    </div>
+    <div class="row">
+      <button class="secondary" onclick="document.getElementById('legadoFile').click()">选择 JSON 文件</button>
+      <input type="file" id="legadoFile" accept=".json,.txt,application/json">
+      <button class="ghost" onclick="loadSample()">填入示例</button>
+      <button class="ghost" onclick="clearAll()">清空</button>
+    </div>
+    <div style="margin-top:10px">
+      <textarea id="input" placeholder='在此粘贴开源阅读书源 JSON…&#10;支持：[ {...}, {...} ] 数组 / 单个书源对象 / {"0":{...}} 导出格式'></textarea>
+    </div>
+    <div class="row">
+      <button class="primary" id="convertBtn" onclick="doConvert()">开始转换</button>
+    </div>
+    <div class="warnbox" id="warnbox"></div>
+    <div class="status" id="status"></div>
+    <div style="margin-top:10px">
+      <textarea id="output" placeholder="转换结果（香色闺阁书源 JSON）…" readonly style="min-height:200px"></textarea>
+    </div>
+    <div class="row">
+      <button class="secondary" onclick="copyOut()" disabled id="copyBtn">复制 JSON</button>
+      <button class="secondary" onclick="downloadJson()" disabled id="dlJsonBtn">下载 .json</button>
+      <button class="secondary" onclick="downloadXbs()" disabled id="dlXbsBtn">加密为 XBS 并下载</button>
+    </div>
+  </div>
+
+  <!-- XBS 工具 -->
+  <div class="card">
+    <h2>XBS 文件解密查看</h2>
+    <div class="desc">
+      选择香色闺阁导出的 <b>.xbs</b> 文件（XXTEA 加密的 JSON），解密查看内容。加密导出请用上方「加密为 XBS 并下载」。
+    </div>
+    <div class="row">
+      <button class="secondary" onclick="document.getElementById('xbsFile').click()">选择 .xbs 文件</button>
+      <input type="file" id="xbsFile" accept=".xbs">
+      <button class="ghost" onclick="clearXbs()">清空</button>
+    </div>
+    <div class="status" id="xbsStatus"></div>
+  </div>
+
+  <details>
+    <summary>说明与常见问题</summary>
+    <div style="margin-top:8px;line-height:2">
+      · 转换引擎与本仓库 <code>converter/</code> 完全同源（converter.bundle.js），App 内置的也是同一份。<br>
+      · 「需人工处理」提示来自规则级诊断：无法翻译的语法会保留原样并标红，导入 App 后可手动微调。<br>
+      · XBS 文件 = XXTEA 加密的 JSON（末尾 4 字节小端存放原始长度），本页加解密与官方格式字节兼容。<br>
+      · 本工具仅供学习交流，请勿用于商业用途。
+    </div>
+  </details>
+</main>
+
+<footer>
+  Legado2XSGG · MIT License ·
+  <a href="https://github.com/ljun223/legado2xsgg" target="_blank">GitHub</a> ·
+  <a href="https://github.com/ljun223/legado2xsgg/raw/main/releases/xbsrebuild.apk" target="_blank">下载 Android App</a>
+</footer>
+
+<script src="./converter.bundle.js"></script>
+<script>
+"use strict";
+/* ---------------- XXTEA（与 app/apkui/XXTEA.java 字节兼容） ---------------- */
+var XBS_KEY_BYTES = [
+  0xe5, 0x87, 0xbc, 0xe8, 0xa4, 0x86, 0xe6, 0xbb,
+  0xbf, 0xe9, 0x87, 0x91, 0xe6, 0xba, 0xa1, 0xe5
+];
+/* key 需转为 4 个 uint32 词（与 Java bytesToUint32 一致） */
+var XBS_KEY = new Int32Array(4);
+for (var _ki = 0; _ki < 16; _ki++) {
+  XBS_KEY[_ki >> 2] |= XBS_KEY_BYTES[_ki] << ((_ki & 3) << 3);
+}
+function mx(y, z, p, e, sum) {
+  return ((((z >>> 5) ^ (y << 2)) + ((y >>> 3) ^ (z << 4))) ^ ((sum ^ y) + (XBS_KEY[(p & 3) ^ e] ^ z))) | 0;
+}
+function bytesToWords(b) {
+  var n = b.length >> 2, v = new Int32Array(n);
+  for (var i = 0; i < b.length; i++) v[i >> 2] |= (b[i] & 0xFF) << ((i & 3) << 3);
+  return v;
+}
+function wordsToBytes(v) {
+  var out = new Uint8Array(v.length * 4);
+  for (var i = 0; i < v.length; i++) {
+    out[4 * i] = v[i] & 0xFF; out[4 * i + 1] = (v[i] >>> 8) & 0xFF;
+    out[4 * i + 2] = (v[i] >>> 16) & 0xFF; out[4 * i + 3] = (v[i] >>> 24) & 0xFF;
+  }
+  return out;
+}
+function xxteaEncrypt(data) {
+  if (data.length < 8 || (data.length & 3) !== 0) throw new Error("XBS 数据长度非法");
+  var v = bytesToWords(data), n = v.length;
+  var rounds = 6 + Math.floor(52 / n), sum = 0, z = v[n - 1], y, e, p;
+  for (var i = 0; i < rounds; i++) {
+    sum = (sum + 0x9e3779b9) | 0;
+    e = (sum >>> 2) & 3;
+    for (p = 0; p < n - 1; p++) { y = v[p + 1]; v[p] = (v[p] + mx(y, z, p, e, sum)) | 0; z = v[p]; }
+    y = v[0]; v[n - 1] = (v[n - 1] + mx(y, z, p, e, sum)) | 0; z = v[n - 1];
+  }
+  return wordsToBytes(v);
+}
+function xxteaDecrypt(data) {
+  if (data.length < 8 || (data.length & 3) !== 0) throw new Error("XBS 数据长度非法");
+  var v = bytesToWords(data), n = v.length;
+  var rounds = 6 + Math.floor(52 / n), sum = (rounds * 0x9e3779b9) | 0, y = v[0], z, e, p;
+  for (var i = 0; i < rounds; i++) {
+    e = (sum >>> 2) & 3;
+    for (p = n - 1; p > 0; p--) { z = v[p - 1]; v[p] = (v[p] - mx(y, z, p, e, sum)) | 0; y = v[p]; }
+    /* 标准 XXTEA：此处 z 取 v[n-1]（本轮开始前的旧值） */
+    z = v[n - 1];
+    v[0] = (v[0] - mx(y, z, p, e, sum)) | 0; y = v[0];
+    sum = (sum - 0x9e3779b9) | 0;
+  }
+  return wordsToBytes(v);
+}
+/* json 字符串 → xbs 字节（payload 补齐到 4 的倍数 + 末尾 4 字节小端原始长度） */
+function json2xbs(str) {
+  var jb = new TextEncoder().encode(str), len = jb.length;
+  var n = (len & 3) === 0 ? len >> 2 : (len >> 2) + 1;
+  var padded = new Uint8Array((n << 2) + 4);
+  padded.set(jb);
+  var tail = n << 2;
+  padded[tail] = len & 0xFF; padded[tail + 1] = (len >>> 8) & 0xFF;
+  padded[tail + 2] = (len >>> 16) & 0xFF; padded[tail + 3] = (len >>> 24) & 0xFF;
+  return xxteaEncrypt(padded);
+}
+/* xbs 字节 → json 字符串 */
+function xbs2json(bytes) {
+  if (bytes.length < 8) throw new Error("输入数据过短（至少需要 8 字节）");
+  var out = xxteaDecrypt(bytes);
+  var n = bytes.length - 4;
+  var m = ((out[n] & 0xFF) | ((out[n + 1] & 0xFF) << 8) | ((out[n + 2] & 0xFF) << 16) | ((out[n + 3] & 0xFF) << 24)) >>> 0;
+  if (m < n - 3 || m > n) throw new Error("decode error：不是有效的 XBS 文件");
+  return new TextDecoder("utf-8").decode(out.subarray(0, m));
+}
+
+/* ---------------- 页面逻辑 ---------------- */
+var $ = function (id) { return document.getElementById(id); };
+var MANUAL_KEYWORDS = ["需人工", "人工处理", "人工核对", "人工确认", "人工修正", "人工补充", "无法翻译", "已保留原样", "不支持", "缺失"];
+var lastOutputName = "booksource";
+
+function isManual(w) {
+  if (w.level === "error" || w.level === "unsupported") return true;
+  var msg = w.msg || "";
+  return MANUAL_KEYWORDS.some(function (k) { return msg.indexOf(k) !== -1; });
+}
+function setStatus(el, text, cls) {
+  el.className = "status" + (cls ? " " + cls : "");
+  el.textContent = text || "";
+}
+function loadSample() {
+  $("input").value = JSON.stringify([{
+    bookSourceName: "示例书屋",
+    bookSourceUrl: "https://www.example.com",
+    bookSourceType: 0,
+    enabled: true,
+    searchUrl: "/search/{{key}}/{{page}}",
+    ruleSearch: {
+      bookList: "class.result@tag.li",
+      name: "tag.h3@text",
+      author: "class.author@text",
+      bookUrl: "tag.a.0@href",
+      coverUrl: "tag.img@src"
+    },
+    exploreUrl: "玄幻::/xuanhuan/{{page}}.html\n都市::/dushi/{{page}}.html",
+    ruleExplore: { bookList: "class.grid@tag.li", name: "tag.h3@text", bookUrl: "tag.a.0@href" },
+    ruleBookInfo: { name: "class.title@text", author: "class.author@text", intro: "class.intro@text", coverUrl: "class.cover@tag.img@src" },
+    ruleToc: { chapterList: "class.chapter-list@tag.dd", chapterName: "text", chapterUrl: "tag.a@href" },
+    ruleContent: { content: "id.content@all", nextContentUrl: "text.下一页@href" }
+  }], null, 2);
+  setStatus($("status"), "已填入示例书源，点「开始转换」试试", "");
+}
+function clearAll() {
+  $("input").value = ""; $("output").value = "";
+  $("warnbox").style.display = "none";
+  setStatus($("status"), "");
+  ["copyBtn", "dlJsonBtn", "dlXbsBtn"].forEach(function (id) { $(id).disabled = true; });
+}
+function doConvert() {
+  var st = $("status"), wb = $("warnbox");
+  var text = $("input").value.trim();
+  if (!text) { setStatus(st, "请先粘贴或选择书源 JSON", "err"); return; }
+  var src;
+  try { src = JSON.parse(text); } catch (e) { setStatus(st, "JSON 解析失败：" + e.message, "err"); return; }
+  if (!window.ConverterLib || typeof window.ConverterLib.convert !== "function") {
+    setStatus(st, "转换引擎加载失败，请刷新页面重试", "err"); return;
+  }
+  var r;
+  try { r = window.ConverterLib.convert(src, { cryptoJsSource: "" }); }
+  catch (e) { setStatus(st, "转换异常：" + e.message, "err"); return; }
+  if (r.error) { setStatus(st, "转换失败：" + r.error, "err"); return; }
+  if (!r.output) { setStatus(st, "无法识别的书源格式", "err"); }
+
+  // 提示渲染（需人工项标红）
+  wb.innerHTML = "";
+  var warns = r.warnings || [];
+  if (warns.length) {
+    var title = document.createElement("div");
+    title.innerHTML = "<b>转换提示（" + warns.length + " 条）</b>";
+    wb.appendChild(title);
+    warns.forEach(function (w) {
+      var div = document.createElement("div");
+      var line = "[" + (w.level || "") + "]" + (w.module ? "[" + w.module + "] " : "") + (w.msg || "");
+      div.textContent = line;
+      if (isManual(w)) div.className = "red";
+      wb.appendChild(div);
+    });
+    wb.style.display = "block";
+  } else {
+    wb.style.display = "none";
+  }
+
+  var pretty = JSON.stringify(r.output, null, 2);
+  $("output").value = pretty;
+  var keys = r.output ? Object.keys(r.output) : [];
+  lastOutputName = keys[0] ? keys[0].replace(/[\\/:*?"<>|\x00-\x1f]/g, "_") : "booksource";
+  var manualCount = warns.filter(isManual).length;
+  setStatus(st, "转换完成：" + keys.join("、") + "（提示 " + warns.length + " 条" + (manualCount ? "，其中需人工 " + manualCount + " 条" : "") + "）", "ok");
+  ["copyBtn", "dlJsonBtn", "dlXbsBtn"].forEach(function (id) { $(id).disabled = false; });
+}
+function copyOut() {
+  var t = $("output").value;
+  if (!t) return;
+  (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () {
+    setStatus($("status"), "JSON 已复制到剪贴板", "ok");
+  }, function () {
+    $("output").removeAttribute("readonly");
+    $("output").select();
+    document.execCommand("copy");
+    $("output").setAttribute("readonly", "readonly");
+    setStatus($("status"), "JSON 已复制到剪贴板", "ok");
+  });
+}
+function downloadBlob(bytes, name, mime) {
+  var blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: mime || "application/octet-stream" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+}
+function downloadJson() {
+  var t = $("output").value;
+  if (!t) return;
+  downloadBlob(t, lastOutputName + ".json", "application/json");
+}
+function downloadXbs() {
+  var t = $("output").value;
+  if (!t) return;
+  try {
+    var xbs = json2xbs(t);
+    downloadBlob(xbs, lastOutputName + ".xbs");
+    setStatus($("status"), "已生成 XBS（" + xbs.length + " 字节），可直接导入香色闺阁", "ok");
+  } catch (e) {
+    setStatus($("status"), "XBS 加密失败：" + e.message, "err");
+  }
+}
+$("legadoFile").addEventListener("change", function (ev) {
+  var f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function () {
+    $("input").value = String(rd.result);
+    setStatus($("status"), "已载入 " + f.name + "（" + rd.result.length + " 字符），点「开始转换」", "");
+    doConvert();
+  };
+  rd.readAsText(f, "utf-8");
+  ev.target.value = "";
+});
+$("xbsFile").addEventListener("change", function (ev) {
+  var f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function () {
+    try {
+      var bytes = new Uint8Array(rd.result);
+      var json = xbs2json(bytes);
+      var pretty = JSON.stringify(JSON.parse(json), null, 2);
+      $("output").value = pretty;
+      var keys = {};
+      try { keys = JSON.parse(json); } catch (ignored) {}
+      var name = Object.keys(keys)[0] || f.name.replace(/\.xbs$/i, "");
+      lastOutputName = name.replace(/[\\/:*?"<>|\x00-\x1f]/g, "_");
+      ["copyBtn", "dlJsonBtn", "dlXbsBtn"].forEach(function (id) { $(id).disabled = false; });
+      setStatus($("xbsStatus"), "解密成功：" + f.name + "（" + bytes.length + " 字节 → " + json.length + " 字符），结果已放入下方输出框", "ok");
+      document.querySelector("#output").scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch (e) {
+      setStatus($("xbsStatus"), "解密失败：" + e.message, "err");
+    }
+  };
+  rd.readAsArrayBuffer(f);
+  ev.target.value = "";
+});
+function clearXbs() {
+  setStatus($("xbsStatus"), "");
+}
+</script>
+</body>
+</html>

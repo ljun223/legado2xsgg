@@ -4,6 +4,10 @@
 
 > 无需服务器、无需 Node 运行时：转换引擎是零依赖的原生 JavaScript，可跑在 Node、浏览器、Android WebView 里。
 
+**在线使用（GitHub Pages）**：<https://ljun223.github.io/legado2xsgg/> —— 打开即用，转换全程在本地浏览器完成，数据不上传。
+
+**下载 Android App**：[releases/xbsrebuild.apk](releases/xbsrebuild.apk)（或到 [Releases](https://github.com/ljun223/legado2xsgg/releases) 页面下载带签名的版本）。
+
 ## 功能
 
 ### 转换引擎（`converter/`）
@@ -43,6 +47,7 @@
 
 ```
 legado2xsgg/
+├── docs/                 # GitHub Pages 网页版（index.html）+ 两端书源规则文档
 ├── converter/            # 转换引擎（纯 JS，零依赖）
 │   ├── lib/              #   核心实现
 │   ├── test/             #   金标准回归 + 单元测试
@@ -53,7 +58,7 @@ legado2xsgg/
 │   ├── assets/           #   converter.bundle.js（勿手改，脚本生成）、skill 文档
 │   ├── tools/            #   bundle 生成 / zipalign 脚本
 │   └── build-apk.sh      #   一键构建 APK
-└── docs/                 # 两端书源规则文档（版权归原作者）
+└── releases/             # 预编译 APK 下载
 ```
 
 ## 构建与测试
