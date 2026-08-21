@@ -58,7 +58,7 @@ test("规则: || 备选拆分", function () {
 });
 test("规则: ## 净化 → @js replace（纯文本用字符串）", function () {
   var r = rules.convertRule(".sort@text##类别：", BASE);
-  eq(r.value, '//*[contains(@class,"sort")]/text()\n@js:\nreturn result.replace("类别：","");');
+  eq(r.value, '//*[contains(@class,"sort")]/text()||@js:\nreturn result.replace("类别：","");');
 });
 test("规则: ### 正则净化 OnlyOne（无 g）", function () {
   var r = rules.convertRule("em@text###\\d+", BASE);
@@ -234,3 +234,37 @@ tests.forEach(function (t) {
 console.log("");
 console.log(failures === 0 ? "全部通过（" + tests.length + " 项）" : failures + " 项失败");
 process.exit(failures === 0 ? 0 : 1);
+
+// ---------- {{@@}} 内联 与 ||@js: 组装 ----------
+test("rules: @js 后缀组装为 ||@js:", function () {
+  var r = rules.convertRule("img@src@js:baseUrl+result", BASE);
+  eq(r.value, "//img/@src||@js:\nreturn (config.host+result);");
+});
+test("rules: {{@@规则}} 内联求值等价转换", function () {
+  var a = rules.convertRule("@js:baseUrl+{{@@img@src}}", BASE);
+  var b = rules.convertRule("img@src@js:baseUrl+result", BASE);
+  eq(a.value, b.value);
+});
+test("rules: 净化后缀组装为 ||@js:", function () {
+  var r = rules.convertRule("class.x@text##广告##", BASE);
+  ok(r.value.indexOf('||@js:\nreturn result.replace("广告","");') !== -1, "应为 ||@js: 后处理");
+});
+
+// ---------- JSON 解析源 ----------
+test("rules: JSONPath/裸词透传（jsonEnabled）", function () {
+  eq(rules.convertRule("$.info.Datas", { jsonEnabled: true }).value, "$.info.Datas");
+  eq(rules.convertRule("author", { jsonEnabled: true }).value, "author");
+  var multi = rules.convertRule("{{$.a}},{{$.b}}", { jsonEnabled: true });
+  ok(multi.warnings.some(function (w) { return w.level === "degraded"; }), "多键组合应有提示");
+});
+test("modules: JSON 源整模块启用 json 解析", function () {
+  var ctx = { src: mkSrc({
+    searchUrl: "https://api.x.com/search?q={{key}}",
+    ruleSearch: { bookList: "$.info.Datas", name: "name", author: "author", bookUrl: "$.url" }
+  }), host: "https://x.com", jsonEnabled: false };
+  var sb = modules.buildSearchBook(ctx.src, ctx);
+  eq(sb.module.parserID, "JSON");
+  eq(sb.module.responseFormatType, "json");
+  eq(sb.module.list, "$.info.Datas");
+  eq(sb.module.bookName, "name");
+});

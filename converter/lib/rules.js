@@ -120,6 +120,24 @@ function convertOne(rule, ctx) {
     return { value: original, warnings: warnings };
   }
 
+  // 3.5 {{@@规则}} 内联求值：@js:baseUrl+{{@@img@src}} 等价于 img@src@js:baseUrl+result，
+  //     转换为 XSGG 的「xpath||@js:」后处理形态（result 为选择器取值）
+  var inline = null;
+  if (jsCode !== null && jsCode.indexOf("{{") !== -1) {
+    inline = tryInlineRuleJs(jsCode, ctx, warnings);
+    if (inline) {
+      jsCode = null; // 已并入 inline.code
+    }
+  }
+  if (inline) {
+    var ivalue = inline.xpath + "||@js:\n" + ensureReturn(inline.code);
+    if (inline.needsCrypto && ctx.cryptoJsSource) {
+      ivalue = jsRule.CRYPTOJS_PREFIX + ctx.cryptoJsSource + "\n" + ivalue;
+      warnings.push({ level: "note", msg: "已注入 cryptojs（前端 CryptoJS 库），注入语法请以实际 App 验证为准" });
+    }
+    return { value: ivalue, warnings: warnings };
+  }
+
   // 4. 翻译 JS 片段
   var jsResult = null;
   if (jsCode !== null) {
@@ -169,6 +187,15 @@ function convertOne(rule, ctx) {
              body.indexOf("@cookie:") === 0) {
     warnings.push({ level: "unsupported", msg: "变量操作规则（" + body + "）不支持，已保留原样" });
     xpath = body;
+  } else if (ctx.jsonEnabled && /^[a-zA-Z_$][\w$.\[\]]*$/.test(body)) {
+    // JSON 源裸词 = 相对 JSON 键（如 author/cover/abstract），直接透传
+    xpath = body;
+  } else if (/^\{\{\s*\$[^}]*\}\}/.test(body) && body.indexOf("{{", 1) !== -1) {
+    warnings.push({ level: "degraded", msg: "多 JSONPath 组合规则（" + body + "）需人工确认：XSGG 单字段建议只取一个键，其余可用 ||@js: 拼接" });
+    xpath = body;
+  } else if (/^https?:\/\/.*\{\{\s*\$[^}]+\}\}/.test(body)) {
+    warnings.push({ level: "degraded", msg: "URL 内嵌 JSONPath（" + body + "）：XSGG 可改写为「JSONPath||@js: 拼接完整 URL」（result 为取值），需人工处理" });
+    xpath = body;
   } else if (body.indexOf("{{") !== -1) {
     warnings.push({ level: "unsupported", msg: "规则内嵌 {{}}（" + body + "）不支持，已保留原样，需人工处理" });
     xpath = body;
@@ -204,7 +231,8 @@ function convertOne(rule, ctx) {
     if (value === "") {
       value = jsRule.wrapJsBlock(jsLines, ctx, jsResult ? jsResult.needsCrypto : false);
     } else {
-      value += "\n@js:\n" + jsLines.join("\n");
+      // XSGG 后处理语法：xpath||@js:（result 为选择器取值）
+      value += "||@js:\n" + jsLines.join("\n");
       if (jsResult && jsResult.needsCrypto && ctx.cryptoJsSource) {
         value = "cryptojs=" + ctx.cryptoJsSource + "\n" + value;
         warnings.push({ level: "note", msg: "已注入 cryptojs（前端 CryptoJS 库），注入语法请以实际 App 验证为准" });
@@ -212,6 +240,44 @@ function convertOne(rule, ctx) {
     }
   }
   return { value: value, warnings: warnings };
+}
+
+/**
+ * {{@@规则}} 内联求值转换：
+ *   @js:baseUrl+{{@@img@src}} → xpath=//img/@src，code=config.host+result
+ * 仅支持恰好一个占位符且子规则可转为纯 XPath/JSONPath；否则返回 null（走原 unsupported 路径）。
+ */
+function tryInlineRuleJs(jsCode, ctx, warnings) {
+  var re = /\{\{\s*(@@|@XPath:|@json:|\/\/|\$)\s*([\s\S]*?)\s*\}\}/g;
+  var matches = [];
+  var m;
+  while ((m = re.exec(jsCode)) !== null) {
+    matches.push({ full: m[0], prefix: m[1], inner: m[2] });
+  }
+  if (matches.length !== 1) {
+    if (matches.length > 1) {
+      warnings.push({ level: "unsupported", msg: "JS 内含多个 {{规则}} 占位符，无法自动改写为 ||@js: 形态，已保留原样，需人工处理" });
+    }
+    return null;
+  }
+  var ph = matches[0];
+  // 其余部分必须是纯表达式（不得再含 {{ }}）
+  var rest = jsCode.replace(ph.full, "\u0000R\u0000");
+  if (rest.indexOf("{{") !== -1 || rest.indexOf("}}") !== -1) return null;
+  // 子规则转 XPath
+  var subBody = ph.prefix === "@@" ? ph.inner : (ph.prefix === "//" ? "//" + ph.inner : ph.prefix + ph.inner);
+  var sub = convertOne(subBody, ctx);
+  warnings.push.apply(warnings, sub.warnings);
+  var subXp = String(sub.value || "");
+  if (!subXp || subXp.indexOf("@js:") !== -1 || subXp.indexOf("\n") !== -1) {
+    warnings.push({ level: "unsupported", msg: "{{" + ph.full.slice(2, -2) + "}} 子规则无法转为纯选择器，已保留原样，需人工处理" });
+    return null;
+  }
+  var newCode = rest.replace("\u0000R\u0000", "result");
+  var tr = jsRule.translateJs(newCode, ctx);
+  var notes = tr.notes.map(function (n) { return { level: "degraded", msg: n }; });
+  warnings.push.apply(warnings, notes);
+  return { xpath: subXp, code: tr.code, needsCrypto: tr.needsCrypto };
 }
 
 // 主入口：一条字段规则（可含 || && %% 与倒序前缀 -）

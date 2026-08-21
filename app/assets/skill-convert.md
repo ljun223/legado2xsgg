@@ -59,14 +59,23 @@
 - `text.xxx` 段后跟 `@text` → `//*[contains(text(),"xxx")]/text()`
 
 ### 复杂语法处理
-- 尾部 `##正则##替换`：转换为 `@js:` 块（`@js:\nreturn result.replace(...)`），替换内容为空时第二 `##` 省略；`##...##...###`（OnlyOne，只取第一个匹配）用非全局 replace。
-- 规则尾部 `<js>代码</js>` 或 `@js:代码`：JS 片段可直接保留为 `@js:`（注意 `result` 变量）。
+- 尾部 `##正则##替换`：转换为 `xpath||@js:` 后处理（`return result.replace(...)`），替换内容为空时第二 `##` 省略；`##...##...###`（OnlyOne，只取第一个匹配）用非全局 replace。
+- 规则尾部 `<js>代码</js>` 或 `@js:代码`：与选择器组合时输出 `xpath||@js:` 形态（`result` 为选择器取值，`baseUrl`→`config.host`）；纯 JS 规则输出 `@js:` 块。
+- **`{{@@规则}}` 内联求值**：Legado 中 `@js:baseUrl+{{@@img@src}}` 等价于 `img@src@js:baseUrl+result`，统一转换为 `//img/@src||@js:\nreturn config.host+result;`（仅支持单个占位符且子规则可转纯选择器）。
 - `||` 备选：各备选分别转换后用 ` || ` 连接（香色闺阁原生支持）。
 - `&&` 合并所有值：各段均为纯 XPath 时转为并集 `|` 并注明语义差异；含 JS 段时保留原样并注明需人工处理。
 - `%%` 依次取数：无对应能力，保留原样并注明需人工处理。
 - 列表倒序前缀 `-`（如目录 `-tag.dd`）：剥离前缀后正常转换，注明结果顺序可能相反。
 - 详情页 `tocUrl` 规则：香色闺阁目录默认沿用详情页 URL，若目录页与详情页不同需为 chapterList 手动配置 requestInfo，转换说明中必须提示。
-- 无法转换的（JSONPath、`@put:`、`@rule:`、`{{}}` 内嵌等）：保留原文并在输出 JSON 中注明需人工处理。
+- 无法转换的（`@put:`、`@rule:`、`{{}}` 内嵌等）：保留原文并在输出 JSON 中注明需人工处理。
+
+### JSON 解析源（API 源）
+
+当模块的列表规则为 JSONPath（`$.x` / `$..` / `@json:` 前缀）或任一字段为 JSONPath 时，整模块自动切换为 JSON 解析：`parserID:"JSON"`、`responseFormatType:"json"`，规则直接透传：
+- JSONPath（`$.info.Datas`）→ 原样透传；
+- **裸词**（如 `author`、`cover`、`abstract`）= 相对当前条目的 JSON 键 → 原样透传；
+- 多 JSONPath 组合（`{{$.a}},{{$.b}}`）与 URL 内嵌 JSONPath（`https://x.com/d/{{$.id}}`）→ 保留原样 + degraded 提示（XSGG 可用 `JSONPath||@js: result` 拼接改写），需人工确认；
+- 同一书源可混合：如搜索/正文为 JSON、目录页为 HTML，各模块独立判定。
 
 ### java.* 函数映射表（JS 内调用）
 

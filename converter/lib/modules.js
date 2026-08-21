@@ -8,6 +8,32 @@ var rules = require("./rules");
 var urlRule = require("./urlRule");
 var utils = require("./utils");
 
+// JSON 解析源检测：规则为 JSONPath（$.x / $.. / @json:）即整模块启用 JSON 解析
+function isJsonRule(s) {
+  s = String(s || "").trim();
+  return s.charAt(0) === "$" || s.indexOf("@json:") === 0;
+}
+// 返回启用 jsonEnabled 的 ctx 副本（非 JSON 规则时原样返回）
+function jsonCtx(ctx, listRule) {
+  if (!isJsonRule(listRule)) return ctx;
+  var c = {};
+  for (var k in ctx) c[k] = ctx[k];
+  c.jsonEnabled = true;
+  return c;
+}
+// 无列表规则的模块：任一字段为 JSONPath 即视为 JSON 源
+function anyJson(obj) {
+  if (!obj) return false;
+  var keys = Object.keys(obj);
+  for (var i = 0; i < keys.length; i++) {
+    if (isJsonRule(obj[keys[i]])) return true;
+  }
+  return false;
+}
+function jsonNote(warnings) {
+  warnings.push({ level: "note", msg: "检测到 JSONPath 规则，已启用 JSON 解析（parserID=JSON，responseFormatType=json），JSONPath 直接透传" });
+}
+
 function base(moduleName, host, jsonEnabled) {
   var m = {
     validConfig: "",
@@ -63,9 +89,11 @@ function buildSearchBook(src, ctx) {
       return { module: null, warnings: warnings.concat([{ level: "note", msg: "无 ruleSearch/ruleExplore，跳过 searchBook" }]) };
     }
   }
-  var ri = urlRule.buildRequestInfo(String(src.searchUrl), ctx, "search");
+  var jctx = jsonCtx(ctx, rs.bookList);
+  if (jctx.jsonEnabled) jsonNote(warnings);
+  var ri = urlRule.buildRequestInfo(String(src.searchUrl), jctx, "search");
   warnings = warnings.concat(ri.warnings);
-  var m = base("searchBook", ctx.host, ctx.jsonEnabled);
+  var m = base("searchBook", jctx.host, jctx.jsonEnabled);
   m.requestInfo = ri.requestInfo;
   var p = pickFields(rs, [
     ["bookList", "list"],
@@ -77,7 +105,7 @@ function buildSearchBook(src, ctx) {
     ["intro", "desc", { optional: true }],
     ["wordCount", "wordCount", { optional: true }],
     ["lastChapter", "lastChapterTitle", { optional: true }]
-  ], ctx);
+  ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
   return { module: m, warnings: warnings };
@@ -89,7 +117,9 @@ function buildBookDetail(src, ctx) {
   if (!src.ruleBookInfo || !Object.keys(src.ruleBookInfo).length) {
     return { module: null, warnings: warnings.concat([{ level: "note", msg: "无 ruleBookInfo，跳过 bookDetail" }]) };
   }
-  var m = base("bookDetail", ctx.host, ctx.jsonEnabled);
+  var jctx = anyJson(src.ruleBookInfo) ? jsonCtx(ctx, "$.x") : ctx;
+  if (jctx.jsonEnabled) jsonNote(warnings);
+  var m = base("bookDetail", jctx.host, jctx.jsonEnabled);
   // 无 requestInfo：App 会沿用点击进入的详情页 URL
   warnings.push({ level: "note", msg: "bookDetail 未设 requestInfo，将沿用搜索结果/分类点击进入的详情页 URL" });
   if (src.ruleBookInfo.tocUrl) {
@@ -103,7 +133,7 @@ function buildBookDetail(src, ctx) {
     ["kind", "cat", { optional: true }],
     ["wordCount", "wordCount", { optional: true }],
     ["lastChapter", "lastChapterTitle", { optional: true }]
-  ], ctx);
+  ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
   return { module: m, warnings: warnings };
@@ -115,7 +145,9 @@ function buildChapterList(src, ctx) {
   if (!src.ruleToc || !Object.keys(src.ruleToc).length) {
     return { module: null, warnings: warnings.concat([{ level: "note", msg: "无 ruleToc，跳过 chapterList" }]) };
   }
-  var m = base("chapterList", ctx.host, ctx.jsonEnabled);
+  var jctx = jsonCtx(ctx, src.ruleToc.chapterList);
+  if (jctx.jsonEnabled) jsonNote(warnings);
+  var m = base("chapterList", jctx.host, jctx.jsonEnabled);
   // 无 requestInfo：沿用 bookDetail 页 URL（Legado 的目录解析即在详情页进行）
   warnings.push({ level: "note", msg: "chapterList 未设 requestInfo，将沿用 bookDetail 页 URL 解析目录" });
   var p = pickFields(src.ruleToc, [
@@ -124,7 +156,7 @@ function buildChapterList(src, ctx) {
     ["chapterUrl", "url"],
     ["nextTocUrl", "nextPageUrl", { optional: true }],
     ["updateTime", "updateTime", { optional: true }]
-  ], ctx);
+  ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
   if (src.ruleToc.chapterUrl && /^[^\/\s]/.test(String(src.ruleToc.chapterUrl).trim())) {
@@ -139,13 +171,15 @@ function buildChapterContent(src, ctx) {
   if (!src.ruleContent || !Object.keys(src.ruleContent).length) {
     return { module: null, warnings: warnings.concat([{ level: "note", msg: "无 ruleContent，跳过 chapterContent" }]) };
   }
-  var m = base("chapterContent", ctx.host, ctx.jsonEnabled);
+  var jctx = anyJson(src.ruleContent) ? jsonCtx(ctx, "$.x") : ctx;
+  if (jctx.jsonEnabled) jsonNote(warnings);
+  var m = base("chapterContent", jctx.host, jctx.jsonEnabled);
   // 无 requestInfo：沿用章节列表点击的章节页 URL
   warnings.push({ level: "note", msg: "chapterContent 未设 requestInfo，将沿用章节列表点击的章节页 URL" });
   var p = pickFields(src.ruleContent, [
     ["content", "content"],
     ["nextContentUrl", "nextPageUrl", { optional: true }]
-  ], ctx);
+  ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
   return { module: m, warnings: warnings };
@@ -272,7 +306,9 @@ function buildBookWorld(src, ctx) {
     return { module: null, warnings: warnings.concat([{ level: "note", msg: "exploreUrl 为空，跳过 bookWorld" }]) };
   }
 
-  var m = base("bookWorld", ctx.host, ctx.jsonEnabled);
+  var jctx = jsonCtx(ctx, re.bookList);
+  if (jctx.jsonEnabled) jsonNote(warnings);
+  var m = base("bookWorld", jctx.host, jctx.jsonEnabled);
   var p = pickFields(re, [
     ["bookList", "list"],
     ["name", "bookName"],
@@ -283,7 +319,7 @@ function buildBookWorld(src, ctx) {
     ["kind", "cat", { optional: true }],
     ["wordCount", "wordCount", { optional: true }],
     ["lastChapter", "lastChapterTitle", { optional: true }]
-  ], ctx);
+  ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
 
