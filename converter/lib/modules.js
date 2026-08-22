@@ -233,6 +233,37 @@ function parseExploreLines(exploreUrl) {
   return out;
 }
 
+// 分类 URL 中的 {{...}} 模板归一化：
+// 页码类模板（含 page 变量的 JS 表达式，如 {{page}}、{{(page-1)*20}}、{{page == 1 ? "" : page + ".html"}}）
+// 翻译为 JS 后统一占位为 {{page}}；规则前缀型占位符（@@/@css:/@json:/@xpath://$）记为 bad。
+function normalizePageTemplates(path) {
+  var re = /\{\{([\s\S]+?)\}\}/g;
+  var norm = "";
+  var last = 0, m;
+  var exprs = [], bad = [];
+  while ((m = re.exec(path)) !== null) {
+    norm += path.slice(last, m.index);
+    var e = m[1].trim();
+    var rulePrefix = /^(@@|@css:|@json:|@xpath:|\$)/.test(e) || e.indexOf("//") === 0;
+    if (rulePrefix) {
+      bad.push(e);
+      norm += m[0];
+    } else {
+      try {
+        var tr = urlRule.exprToJs(e, {});
+        exprs.push(tr.expr);
+        norm += "{{page}}";
+      } catch (err) {
+        bad.push(e);
+        norm += m[0];
+      }
+    }
+    last = m.index + m[0].length;
+  }
+  norm += path.slice(last);
+  return { norm: norm, exprs: exprs, bad: bad, ok: bad.length === 0 };
+}
+
 // 判断 _type 模式：所有行均有 {{page}}，各路径只在同一路径段上不同（token），
 // 兼容相对（/xuanhuan/{{page}}.html）与绝对（https://a.com/x/?page={{page}}）URL、
 // 兼容 token 在中间段（/item/{cat}/page/{{page}}）
@@ -323,14 +354,37 @@ function buildBookWorld(src, ctx) {
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
 
-  var typeMode = analyzeTypeMode(lines);
+  // {{}} 页码模板归一化：{{page == 1 ? "" : page + ".html"}} 等算术/三元表达式 → {{page}}
+  var normLines = [];
+  var pgExprSig = null, allSameExpr = true, hasBad = false, badList = [], hasAnyTemplate = false;
+  for (var ni = 0; ni < lines.length; ni++) {
+    var nt = normalizePageTemplates(lines[ni].path);
+    if (nt.exprs.length) hasAnyTemplate = true;
+    if (nt.bad.length) { hasBad = true; badList = badList.concat(nt.bad); }
+    var sig2 = nt.exprs.join("\u0001");
+    if (pgExprSig === null) pgExprSig = sig2;
+    else if (sig2 !== pgExprSig) allSameExpr = false;
+    normLines.push({ name: lines[ni].name, path: nt.norm });
+  }
+  if (hasBad) {
+    warnings.push({ level: "degraded", msg: "分类 URL 含选择器型占位符（" + badList.slice(0, 3).join("、") + (badList.length > 3 ? "…" : "") + "），无法在分类入口求值，已原样保留，请人工处理" });
+  }
+
+  var typeMode = (!hasBad && allSameExpr && hasAnyTemplate) ? analyzeTypeMode(normLines) : null;
   if (typeMode) {
     // _type 模式：共享 URL 模板 + 格式三筛选（对齐手工转换基准：小原文学网（香色闺阁）.json）
     var filters = "_type";
-    for (var i = 0; i < lines.length; i++) {
-      filters += "\n" + lines[i].name + "::" + typeMode.tokens[i];
+    for (var i = 0; i < normLines.length; i++) {
+      filters += "\n" + normLines[i].name + "::" + typeMode.tokens[i];
     }
-    var urlTpl = typeMode.pattern.replace("_TYPE_", "${_type}") + "${params.pageIndex}" + typeMode.post;
+    // {{page}} 标记按出现顺序替换为已翻译的页码表达式（支持算术/三元，如 page == 1 ? "" : page + ".html"）
+    var pgExprs = pgExprSig === "" ? [] : pgExprSig.split("\u0001");
+    var pgIdx = 0;
+    var urlTpl = typeMode.pattern.replace("_TYPE_", "${_type}") + "${" + (pgExprs[pgIdx] || "params.pageIndex") + "}" + typeMode.post;
+    urlTpl = urlTpl.replace(/\{\{page\}\}/g, function () {
+      pgIdx++;
+      return "${" + (pgExprs[pgIdx] || "params.pageIndex") + "}";
+    });
     m.requestInfo = "@js:\nlet {_type}=params.filters\nlet url=`" + urlTpl + "`;\n\nreturn {url:url}";
     m._sIndex = 0;
     m.moreKeys = {
@@ -390,7 +444,8 @@ function buildBookWorld(src, ctx) {
           : "params.filters.order + \"" + pageSeg + "\" + params.pageIndex" + (post ? " + \"" + post + "\"" : "");
       m.requestInfo = "@js:\nlet url = " + tpl + "\n\nreturn encodeURI(url)";
     } else {
-      // replace 方案：value 保留完整路径（含 {{page}}），运行时替换页码
+      // 运行时求值方案：value 保留完整路径，requestInfo 用 Function 求值任意 {{页码表达式}}
+      // （支持 {{page}}、{{(page-1)*20}}、{{page == 1 ? "" : page + ".html"}} 等全部形态）
       for (var r = 0; r < lines.length; r++) {
         var p3 = safeDecode(lines[r].path);
         items.push({ title: lines[r].name, value: p3 });
@@ -398,7 +453,15 @@ function buildBookWorld(src, ctx) {
           warnings.push({ level: "note", msg: "分类[" + lines[r].name + "] URL 为相对地址（" + p3 + "），将基于站点 host 拼接" });
         }
       }
-      m.requestInfo = "@js:\nlet url = params.filters.order.replace('{{page}}', params.pageIndex)\n\nreturn encodeURI(url)";
+      m.requestInfo = "@js:\nlet url = String(params.filters.order).replace(/\\{\\{([\\s\\S]*?)\\}\\}/g, function(_, e){\n"
+          + "  try {\n"
+          + "    var f = new Function('page', 'key', 'return (' + e + ')');\n"
+          + "    return String(f(params.pageIndex, params.keyWord));\n"
+          + "  } catch (err) {\n"
+          + "    return _;\n"
+          + "  }\n"
+          + "})\n\nreturn encodeURI(url)";
+      warnings.push({ level: "note", msg: "分类 URL 的 {{}} 表达式将在运行时按 page/key 求值（支持算术与三元表达式）" });
     }
     m._sIndex = 0;
     m.moreKeys = {

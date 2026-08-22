@@ -392,5 +392,6 @@ module.exports = {
   buildRequestInfo: buildRequestInfo,
   splitUrlOptions: splitUrlOptions,
   findTemplates: findTemplates,
+  exprToJs: exprToJs,
   CHARSET_MAP: CHARSET_MAP
 };

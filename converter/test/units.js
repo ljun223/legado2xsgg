@@ -186,12 +186,12 @@ test("modules: bookWorld 逐行模式（格式二数组 + 分页拼接）", func
   ok(m.requestInfo.indexOf("params.filters.order") !== -1, "requestInfo 应引用 params.filters.order");
   ok(m.requestInfo.indexOf("encodeURI") !== -1, "requestInfo 应 encodeURI");
 });
-test("modules: bookWorld 单入口（replace 方案）", function () {
+test("modules: bookWorld 单入口（运行时求值方案）", function () {
   var ctx = { src: mkSrc({ exploreUrl: "https://x.com/list/{{page}}.html" }), host: "https://x.com", jsonEnabled: false };
   var bw = modules.buildBookWorld(ctx.src, ctx).module;
   eq(Object.keys(bw).length, 1);
   var m = bw["分类"];
-  ok(m.requestInfo.indexOf(".replace('{{page}}', params.pageIndex)") !== -1, "单行应走 replace 方案");
+  ok(m.requestInfo.indexOf("new Function") !== -1, "单行应走运行时求值方案");
   ok(Array.isArray(m.moreKeys.requestFilters), "requestFilters 应为格式二数组");
   eq(m.moreKeys.requestFilters[0].items[0].value, "https://x.com/list/{{page}}.html");
 });
@@ -291,6 +291,21 @@ test("rules: 多 XPath 占位符 → concat()", function () {
 test("rules: {{JS 表达式}} → @js: 块", function () {
   var r = rules.convertRule('{{baseUrl+"/x"}}', BASE);
   ok(r.value.indexOf("@js:") === 0 && r.value.indexOf("config.host") !== -1, "应翻译为 @js: 块并映射 baseUrl");
+});
+
+test("modules: bookWorld 页码表达式归一化 → _type 模式", function () {
+  var ctx = { src: mkSrc({ exploreUrl: "完结::/wanjie/{{page == 1 ? \"\" : page + \".html\"}}\n玄幻::/xuanhuan/{{page == 1 ? \"\" : page + \".html\"}}" }), host: "https://x.com", jsonEnabled: false };
+  var r = modules.buildBookWorld(ctx.src, ctx);
+  var m = r.module["分类"];
+  eq(m.moreKeys.requestFilters.split("\n")[0], "_type");
+  ok(m.requestInfo.indexOf("${params.pageIndex == 1 ? \"\" : params.pageIndex + \".html\"}") !== -1, "应内联翻译后的三元表达式");
+});
+test("modules: bookWorld 各行表达式不同 → 运行时求值方案", function () {
+  var ctx = { src: mkSrc({ exploreUrl: "甲::/a/{{(page-1)*20}}.html\n乙::/b/{{page}}.html" }), host: "https://x.com", jsonEnabled: false };
+  var r = modules.buildBookWorld(ctx.src, ctx);
+  var m = r.module["分类"];
+  ok(Array.isArray(m.moreKeys.requestFilters), "应为格式二数组");
+  ok(m.requestInfo.indexOf("new Function") !== -1, "应使用运行时 Function 求值");
 });
 
 console.log("");
