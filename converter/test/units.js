@@ -231,10 +231,6 @@ tests.forEach(function (t) {
     console.log("      " + e.message.replace(/\n/g, "\n      "));
   }
 });
-console.log("");
-console.log(failures === 0 ? "全部通过（" + tests.length + " 项）" : failures + " 项失败");
-process.exit(failures === 0 ? 0 : 1);
-
 // ---------- {{@@}} 内联 与 ||@js: 组装 ----------
 test("rules: @js 后缀组装为 ||@js:", function () {
   var r = rules.convertRule("img@src@js:baseUrl+result", BASE);
@@ -268,3 +264,35 @@ test("modules: JSON 源整模块启用 json 解析", function () {
   eq(sb.module.list, "$.info.Datas");
   eq(sb.module.bookName, "name");
 });
+
+// ---------- {{}} 模板（嵌套规则求值）----------
+test("rules: {{@@rule}} 整条解包", function () {
+  eq(rules.convertRule("{{@@img@data-src}}", BASE).value, "//img/@data-src");
+  eq(rules.convertRule("{{//img/@src}}", BASE).value, "//img/@src");
+});
+test("rules: {{@css:}} 整条解包", function () {
+  var r = rules.convertRule("{{@css:.cover img@src}}", BASE);
+  eq(r.value, "//*[contains(@class,\"cover\")]//img/@src");
+});
+test("rules: 文本+单 XPath 占位符 → ||@js:", function () {
+  var r = rules.convertRule('https://static.missevan.com/{{//*[contains(@class,"pld")]/@data-soundurl64}}', BASE);
+  eq(r.value, '//*[contains(@class,"pld")]/@data-soundurl64||@js:\nreturn "https://static.missevan.com/"+result;');
+});
+test("rules: 文本+单 JSONPath 占位符（json 模块）→ ||@js:", function () {
+  var r = rules.convertRule("https://www.x.com/drama/{{$.id}}", { jsonEnabled: true });
+  ok(r.value.indexOf("$.id||@js:") === 0, "应以 $.id||@js: 开头");
+  ok(r.value.indexOf('"https://www.x.com/drama/"+result') !== -1, "应拼接前缀");
+});
+test("rules: 多 XPath 占位符 → concat()", function () {
+  var r = rules.convertRule("https://x.com/{{@@h1@text}}/b/{{@@a@href}}", BASE);
+  ok(r.value.indexOf("concat(") === 0, "应为 concat 形式");
+  ok(r.value.indexOf("//h1") !== -1 && r.value.indexOf("//a/@href") !== -1, "应包含两个子选择器");
+});
+test("rules: {{JS 表达式}} → @js: 块", function () {
+  var r = rules.convertRule('{{baseUrl+"/x"}}', BASE);
+  ok(r.value.indexOf("@js:") === 0 && r.value.indexOf("config.host") !== -1, "应翻译为 @js: 块并映射 baseUrl");
+});
+
+console.log("");
+console.log(failures === 0 ? "全部通过（" + tests.length + " 项）" : failures + " 项失败");
+process.exit(failures === 0 ? 0 : 1);

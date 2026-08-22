@@ -1630,6 +1630,166 @@ function ensureReturn(code) {
   return "return (" + c + ");";
 }
 
+/**
+ * {{}} 模板展开（Legado 嵌套求值）。
+ * 占位符前缀：@@=Default、@xpath:/​//=XPath、@css:=CSS、@json:/​$=JSONPath、无前缀=JS 表达式。
+ * 返回转换后的字段值；无法处理时返回 null（调用方保留原样并提示）。
+ * 支持形态：
+ *   A. 整条规则即单个 {{X}}        → 直接输出 X 对应选择器（或 JS → @js: 块）
+ *   B. 文本+单个规则占位符          → 选择器||@js:\nreturn "pre"+result+"post";
+ *   C. 文本+多个纯 XPath 占位符     → concat("a", xp1, "b", xp2)
+ */
+function expandTemplate(body, ctx, warnings) {
+  var parts = parseTemplate(body);
+  if (!parts) return null;
+
+  // 整条 = 单个占位符
+  if (parts.length === 1 && parts[0].t === "ph") {
+    var inner = parts[0].v;
+    if (!/^(@@|@XPath:|@css:|@json:|\/\/|\$)/.test(inner)) {
+      // 纯 JS 表达式占位符 → @js: 块
+      var tr = jsRule.translateJs(inner, ctx);
+      warnings.push.apply(warnings, tr.notes.map(function (n) { return { level: "degraded", msg: n }; }));
+      return jsRule.wrapJsBlock([ensureReturn(tr.code)], ctx, tr.needsCrypto);
+    }
+    var sel = convertPlaceholder(inner, ctx, warnings);
+    if (sel === null) {
+      warnings.push({ level: "unsupported", msg: "{{" + inner + "}} 子规则无法转为纯选择器，已保留原样，需人工处理" });
+      return null;
+    }
+    if (sel.type === "json" && !ctx.jsonEnabled) {
+      warnings.push({ level: "degraded", msg: "JSONPath 占位符出现在非 JSON 模块（" + body + "），已保留原样，需人工处理" });
+      return null;
+    }
+    warnings.push({ level: "note", msg: "{{}} 已解包为对应解析规则：" + inner.slice(0, 40) });
+    return sel.type === "xp" ? sel.v : sel.jp;
+  }
+
+  // 混合文本：逐个转换占位符
+  var conv = [];
+  var phCount = 0;
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i].t === "text") { conv.push(parts[i]); continue; }
+    phCount++;
+    var inner2 = parts[i].v;
+    if (!/^(@@|@XPath:|@css:|@json:|\/\/|\$)/.test(inner2)) {
+      warnings.push({ level: "unsupported", msg: "无前缀 JS 占位符与文本混合（" + body + "）无法自动改写，需人工处理（等价形态：选择器||@js:）" });
+      return null;
+    }
+    var sel2 = convertPlaceholder(inner2, ctx, warnings);
+    if (sel2 === null) {
+      warnings.push({ level: "unsupported", msg: "{{" + inner2 + "}} 子规则无法转为纯选择器，已保留原样，需人工处理" });
+      return null;
+    }
+    conv.push(sel2);
+  }
+
+  // 类型统计（text 段无 type 字段，自然跳过）
+  var xpCount = 0, jsonCount = 0;
+  for (var k = 0; k < conv.length; k++) {
+    if (conv[k].type === "xp") xpCount++;
+    else if (conv[k].type === "json") jsonCount++;
+  }
+
+  // 全为 XPath/CSS 型
+  if (jsonCount === 0) {
+    if (phCount === 1) {
+      for (var k2 = 0; k2 < conv.length; k2++) {
+        if (conv[k2].type !== undefined) {
+          var chain = buildJsChain(conv, "result");
+          warnings.push({ level: "note", msg: "{{}} 嵌套已改写为 选择器||@js: 形态" });
+          return conv[k2].v + "||@js:\nreturn " + chain + ";";
+        }
+      }
+    }
+    // 多占位符 → XPath concat()
+    var args = [];
+    for (var k3 = 0; k3 < conv.length; k3++) {
+      var p = conv[k3];
+      if (p.t === "text") {
+        if (p.v === "") continue;
+        args.push('"' + utils.escAttr(p.v) + '"');
+      } else {
+        args.push("(" + p.v + ")");
+      }
+    }
+    warnings.push({ level: "degraded", msg: "多个 {{}} 占位符已合并为 XPath concat()，若目标 App 解析异常请人工拆分" });
+    return "concat(" + args.join(",") + ")";
+  }
+
+  // 单 JSONPath 占位符 + 文本
+  if (jsonCount === 1 && xpCount === 0 && phCount === 1) {
+    if (!ctx.jsonEnabled) {
+      warnings.push({ level: "degraded", msg: "URL/文本内嵌 JSONPath（" + body + "）出现在非 JSON 模块：已保留原样，可人工改为「$.x||@js: 拼接」并确认模块 responseFormatType=json" });
+      return null;
+    }
+    for (var k4 = 0; k4 < conv.length; k4++) {
+      if (conv[k4].type !== undefined) {
+        var chain2 = buildJsChain(conv, "result");
+        warnings.push({ level: "note", msg: "{{}} 嵌套已改写为 JSONPath||@js: 形态" });
+        return conv[k4].jp + "||@js:\nreturn " + chain2 + ";";
+      }
+    }
+  }
+
+  warnings.push({ level: "unsupported", msg: "多个/混合类型 {{}} 占位符（" + body.slice(0, 60) + "…）无法自动改写，需人工处理" });
+  return null;
+}
+
+/** 把 body 切成 [{t:'text'|'ph', v}]；无占位符返回 null。 */
+function parseTemplate(body) {
+  var out = [];
+  var re = /\{\{([\s\S]+?)\}\}/g;
+  var last = 0, m, count = 0;
+  while ((m = re.exec(body)) !== null) {
+    count++;
+    if (m.index > last) out.push({ t: "text", v: body.slice(last, m.index) });
+    out.push({ t: "ph", v: m[1].trim() });
+    last = m.index + m[0].length;
+  }
+  if (!count) return null;
+  if (last < body.length) out.push({ t: "text", v: body.slice(last) });
+  return out;
+}
+
+/** 占位符内容 → {type:'xp'|'json', v}；JS 表达式/不可识别返回 null。 */
+function convertPlaceholder(inner, ctx, warnings) {
+  if (inner.indexOf("@@") === 0) {
+    var r = convertOne(inner.slice(2), ctx);
+    warnings.push.apply(warnings, r.warnings);
+    var v = String(r.value || "");
+    if (!v || v.indexOf("@js:") !== -1 || v.indexOf("\n") !== -1 || v.indexOf(" || ") !== -1) return null;
+    return { type: "xp", v: v };
+  }
+  if (inner.indexOf("@XPath:") === 0) return { type: "xp", v: inner.slice(7).trim() };
+  if (inner.indexOf("//") === 0) return { type: "xp", v: inner };
+  if (inner.indexOf("@css:") === 0) {
+    var c = cssRule.convertCss(inner, ctx);
+    warnings.push.apply(warnings, (c.notes || []).map(function (n) { return { level: "degraded", msg: n }; }));
+    if (c.error || !c.xpath || c.xpath.indexOf("\n") !== -1) return null;
+    return { type: "xp", v: c.xpath };
+  }
+  if (inner.charAt(0) === "$") return { type: "json", jp: inner };
+  if (inner.indexOf("@json:") === 0) return { type: "json", jp: inner.slice(6).trim() };
+  return null;
+}
+
+/** 生成 'return "pre"+result+"mid"+result;' 形态的拼接表达式。 */
+function buildJsChain(parts, phVar) {
+  var pieces = [];
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (p.t === "text") {
+      if (p.v === "") continue;
+      pieces.push('"' + utils.escStr(p.v) + '"');
+    } else {
+      pieces.push(p.type === "xp" ? phVar : "(" + phVar + ")");
+    }
+  }
+  if (!pieces.length) pieces.push('""');
+  return pieces.join("+");
+}
+
 // 转换一条规则（无 || 备选）
 // ctx: { field, module, src, host, jsonEnabled }
 function convertOne(rule, ctx) {
@@ -1732,15 +1892,15 @@ function convertOne(rule, ctx) {
   } else if (ctx.jsonEnabled && /^[a-zA-Z_$][\w$.\[\]]*$/.test(body)) {
     // JSON 源裸词 = 相对 JSON 键（如 author/cover/abstract），直接透传
     xpath = body;
-  } else if (/^\{\{\s*\$[^}]*\}\}/.test(body) && body.indexOf("{{", 1) !== -1) {
-    warnings.push({ level: "degraded", msg: "多 JSONPath 组合规则（" + body + "）需人工确认：XSGG 单字段建议只取一个键，其余可用 ||@js: 拼接" });
-    xpath = body;
-  } else if (/^https?:\/\/.*\{\{\s*\$[^}]+\}\}/.test(body)) {
-    warnings.push({ level: "degraded", msg: "URL 内嵌 JSONPath（" + body + "）：XSGG 可改写为「JSONPath||@js: 拼接完整 URL」（result 为取值），需人工处理" });
-    xpath = body;
   } else if (body.indexOf("{{") !== -1) {
-    warnings.push({ level: "unsupported", msg: "规则内嵌 {{}}（" + body + "）不支持，已保留原样，需人工处理" });
-    xpath = body;
+    // {{}} 模板：@@=Default、@xpath://=XPath、@css:=CSS、@json:/$.=JSONPath、无前缀=JS
+    var tpl = expandTemplate(body, ctx, warnings);
+    if (tpl !== null) {
+      xpath = tpl;
+    } else {
+      warnings.push({ level: "unsupported", msg: "规则内嵌 {{}}（" + body + "）无法自动转换，已保留原样，需人工处理（XSGG 等价形态：选择器||@js:）" });
+      xpath = body;
+    }
   } else {
     var d = defaultRule.convertDefault(body, ctx);
     if (d.error) {

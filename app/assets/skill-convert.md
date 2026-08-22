@@ -61,13 +61,18 @@
 ### 复杂语法处理
 - 尾部 `##正则##替换`：转换为 `xpath||@js:` 后处理（`return result.replace(...)`），替换内容为空时第二 `##` 省略；`##...##...###`（OnlyOne，只取第一个匹配）用非全局 replace。
 - 规则尾部 `<js>代码</js>` 或 `@js:代码`：与选择器组合时输出 `xpath||@js:` 形态（`result` 为选择器取值，`baseUrl`→`config.host`）；纯 JS 规则输出 `@js:` 块。
-- **`{{@@规则}}` 内联求值**：Legado 中 `@js:baseUrl+{{@@img@src}}` 等价于 `img@src@js:baseUrl+result`，统一转换为 `//img/@src||@js:\nreturn config.host+result;`（仅支持单个占位符且子规则可转纯选择器）。
+- **`{{@@规则}}` 在 @js: 内**：`@js:baseUrl+{{@@img@src}}` ≡ `img@src@js:baseUrl+result`，统一转换为 `//img/@src||@js:\nreturn config.host+result;`（仅支持单个占位符且子规则可转纯选择器）。
+- **`{{}}` 嵌套求值**（可出现在任意位置；占位符内 `@@`=Default、`@xpath:`/`//`=XPath、`@css:`=CSS、`@json:`/`$`=JSONPath、无前缀=JS）：
+  - 整条规则即单个 `{{X}}` → 解包为对应解析规则：`{{@@img@data-src}}` → `//img/@data-src`；`{{$.chapter.body}}` → JSONPath 透传（仅 JSON 模块）；纯 JS 表达式 → `@js:` 块（翻译 java.* 与 baseUrl/src）；
+  - 文本 + 单个规则占位符 → `选择器||@js:\nreturn "前缀"+result+"后缀";`（URL 拼接最常见，如猫耳FM content 的音频地址构造）；
+  - 文本 + 多个纯 XPath 占位符 → 合并为 XPath `concat("a",xp1,"b",xp2)` 并注明；
+  - 多 JSONPath 组合 / JS 占位符混合等复杂形态保留原样并注明需人工处理。
 - `||` 备选：各备选分别转换后用 ` || ` 连接（香色闺阁原生支持）。
 - `&&` 合并所有值：各段均为纯 XPath 时转为并集 `|` 并注明语义差异；含 JS 段时保留原样并注明需人工处理。
 - `%%` 依次取数：无对应能力，保留原样并注明需人工处理。
 - 列表倒序前缀 `-`（如目录 `-tag.dd`）：剥离前缀后正常转换，注明结果顺序可能相反。
 - 详情页 `tocUrl` 规则：香色闺阁目录默认沿用详情页 URL，若目录页与详情页不同需为 chapterList 手动配置 requestInfo，转换说明中必须提示。
-- 无法转换的（`@put:`、`@rule:`、`{{}}` 内嵌等）：保留原文并在输出 JSON 中注明需人工处理。
+- 无法转换的（`@put:`、`@rule:` 等）：保留原文并在输出 JSON 中注明需人工处理。
 
 ### JSON 解析源（API 源）
 
