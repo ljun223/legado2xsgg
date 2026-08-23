@@ -1091,9 +1091,12 @@ function translateJs(code, ctx) {
       var word = m[0];
       var beforeOk = i === 0 || !/[a-zA-Z0-9_$]/.test(code[i - 1]);
       if (beforeOk) {
+        // baseUrl：Legado 每个模块内表示「上一步传来的 URL」。
+        // 字段级 @js: 对应香色闺阁 params.responseUrl（当前响应页 URL，见规则文档第七章）；
+        // requestInfo 内的 baseUrl 由 urlRule 按 role 单独映射（搜索/分类→config.host，目录/正文→result）。
         if (word === "baseUrl") {
-          out += "config.host";
-          notes.push("baseUrl 已映射为 config.host");
+          out += "params.responseUrl";
+          notes.push("baseUrl 已映射为 params.responseUrl（模块内=上一步传入的页面 URL）");
           i += word.length;
           continue;
         }
@@ -1103,14 +1106,71 @@ function translateJs(code, ctx) {
           i += word.length;
           continue;
         }
+        // book.*：上游（搜索/分类/详情）解析结果 → params.queryInfo.*（字段名按两端规范对齐）
+        if (word === "book" && code.charAt(i + word.length) === ".") {
+          var bp = code.slice(i + word.length + 1).match(/^[a-zA-Z_$][\w$]*/);
+          if (bp) {
+            var bmap = { name: "bookName", author: "author", kind: "cat", intro: "desc",
+                         coverUrl: "cover", wordCount: "wordCount",
+                         lastChapter: "lastChapterTitle", bookUrl: "detailUrl" };
+            var bk = bmap[bp[0]] || bp[0];
+            out += "params.queryInfo." + bk;
+            if (bmap[bp[0]] === undefined) {
+              notes.push("book." + bp[0] + " 已直映为 params.queryInfo." + bp[0] + "（无官方对应，请人工确认）");
+            } else {
+              notes.push("book." + bp[0] + " 已映射为 params.queryInfo." + bk);
+            }
+            i += word.length + 1 + bp[0].length;
+            continue;
+          }
+        }
+        // chapter.*：章节上下文
+        if (word === "chapter" && code.charAt(i + word.length) === ".") {
+          var cp = code.slice(i + word.length + 1).match(/^[a-zA-Z_$][\w$]*/);
+          if (cp) {
+            var ck = cp[0];
+            if (ck === "url") {
+              out += "params.responseUrl";
+              notes.push("chapter.url 已映射为 params.responseUrl（本章页 URL）");
+            } else if (ck === "title") {
+              out += "params.queryInfo.title";
+              notes.push("chapter.title 已映射为 params.queryInfo.title（如 App 取值异常请人工调整）");
+            } else {
+              notes.push("chapter." + ck + " 在香色闺阁无可靠对应，已保留原样（需人工处理）");
+              out += "chapter." + ck;
+            }
+            i += word.length + 1 + ck.length;
+            continue;
+          }
+        }
+        // source.*：书源 JSON 字段
+        if (word === "source" && code.charAt(i + word.length) === ".") {
+          var sp = code.slice(i + word.length + 1).match(/^[a-zA-Z_$][\w$]*/);
+          if (sp) {
+            if (sp[0] === "sourceUrl") {
+              out += "config.host";
+              notes.push("source.sourceUrl 已映射为 config.host");
+            } else if (sp[0] === "loginHeader" || sp[0] === "headerMap") {
+              out += "config.httpHeaders";
+              notes.push("source." + sp[0] + " 已映射为 config.httpHeaders");
+            } else {
+              notes.push("source." + sp[0] + " 在香色闺阁无对应（可用 config.host / config.httpHeaders），已保留原样");
+              out += "source." + sp[0];
+            }
+            i += word.length + 1 + sp[0].length;
+            continue;
+          }
+        }
         if (word === "log" && code[i + word.length] === "(") {
           out += "console.log";
           notes.push("log() 已映射为 console.log()");
           i += word.length;
           continue;
         }
-        if (word === "book" || word === "chapter" || word === "cookie" || word === "cache") {
-          notes.push("变量 " + word + " 在香色闺阁无对应，已保留原样（需人工处理）");
+        if (word === "cookie" || word === "cache" || word === "java") {
+          if (word !== "java") {
+            notes.push("变量 " + word + " 在香色闺阁无对应，已保留原样（需人工处理）");
+          }
         }
       }
       out += word;
@@ -1220,6 +1280,18 @@ function exprToJs(expr, ctx) {
       var prevOk = i === 0 || !/[a-zA-Z0-9_$]/.test(e[i - 1]);
       if (prevOk && w === "key") { out += "params.keyWord"; i += w.length; continue; }
       if (prevOk && w === "page") { out += "params.pageIndex"; i += w.length; continue; }
+      if (prevOk && w === "baseUrl") {
+        var rl = ctx && ctx.urlRole;
+        if (rl === "toc" || rl === "content" || rl === "nextToc" || rl === "nextContent") {
+          out += "result";
+          notes.push("baseUrl 已映射为 result（目录/正文请求中 = 上一步传入的 URL，模板占位符亦可写 %@result）");
+        } else {
+          out += "config.host";
+          notes.push("baseUrl 已映射为 config.host（搜索/分类入口模块）");
+        }
+        i += w.length;
+        continue;
+      }
       out += w;
       i += w.length;
       continue;
@@ -1359,6 +1431,10 @@ function splitUrlOptions(urlRule) {
 // ctx: { src, host(origin), jsonEnabled, cryptoJsSource }
 function buildRequestInfo(urlRule, ctx, role) {
   // role: 'search' | 'explore' | 'toc' | 'content' | 'nextToc' | 'nextContent'
+  // baseUrl 的语义随模块不同：目录/正文=上一步 URL(result)，搜索/分类=站点入口(config.host)
+  var xctx = {};
+  for (var ck in ctx) xctx[ck] = ctx[ck];
+  xctx.urlRole = role;
   var warnings = [];
   var split = splitUrlOptions(urlRule);
   var url = split.url.trim();
@@ -1404,7 +1480,7 @@ function buildRequestInfo(urlRule, ctx, role) {
     var bp = bodyToParams(String(options.body), ctx);
     notes = notes.concat(bp.notes);
     if (bp.needsCrypto) needsCrypto = true;
-    var tplLit = jsUrlTemplate(urlStr, tpls, optMaps, ctx, notes);
+    var tplLit = jsUrlTemplate(urlStr, tpls, optMaps, xctx, notes);
     if (tplLit.needsCrypto) needsCrypto = true;
     jsLines.push("let url = `" + tplLit.literal + "`;");
     jsLines.push("let httpParams = " + bp.literal + ";");
@@ -1419,7 +1495,7 @@ function buildRequestInfo(urlRule, ctx, role) {
     jsLines.push("return " + ret + "};");
   } else if (!simple || options) {
     // 复杂模板或带选项 → @js: 脚本
-    var tplLit2 = jsUrlTemplate(urlStr, tpls, optMaps, ctx, notes);
+    var tplLit2 = jsUrlTemplate(urlStr, tpls, optMaps, xctx, notes);
     if (tplLit2.needsCrypto) needsCrypto = true;
     jsLines.push("let url = `" + tplLit2.literal + "`;");
     var ret2 = "{url: url";

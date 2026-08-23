@@ -77,6 +77,18 @@ function exprToJs(expr, ctx) {
       var prevOk = i === 0 || !/[a-zA-Z0-9_$]/.test(e[i - 1]);
       if (prevOk && w === "key") { out += "params.keyWord"; i += w.length; continue; }
       if (prevOk && w === "page") { out += "params.pageIndex"; i += w.length; continue; }
+      if (prevOk && w === "baseUrl") {
+        var rl = ctx && ctx.urlRole;
+        if (rl === "toc" || rl === "content" || rl === "nextToc" || rl === "nextContent") {
+          out += "result";
+          notes.push("baseUrl 已映射为 result（目录/正文请求中 = 上一步传入的 URL，模板占位符亦可写 %@result）");
+        } else {
+          out += "config.host";
+          notes.push("baseUrl 已映射为 config.host（搜索/分类入口模块）");
+        }
+        i += w.length;
+        continue;
+      }
       out += w;
       i += w.length;
       continue;
@@ -216,6 +228,10 @@ function splitUrlOptions(urlRule) {
 // ctx: { src, host(origin), jsonEnabled, cryptoJsSource }
 function buildRequestInfo(urlRule, ctx, role) {
   // role: 'search' | 'explore' | 'toc' | 'content' | 'nextToc' | 'nextContent'
+  // baseUrl 的语义随模块不同：目录/正文=上一步 URL(result)，搜索/分类=站点入口(config.host)
+  var xctx = {};
+  for (var ck in ctx) xctx[ck] = ctx[ck];
+  xctx.urlRole = role;
   var warnings = [];
   var split = splitUrlOptions(urlRule);
   var url = split.url.trim();
@@ -261,7 +277,7 @@ function buildRequestInfo(urlRule, ctx, role) {
     var bp = bodyToParams(String(options.body), ctx);
     notes = notes.concat(bp.notes);
     if (bp.needsCrypto) needsCrypto = true;
-    var tplLit = jsUrlTemplate(urlStr, tpls, optMaps, ctx, notes);
+    var tplLit = jsUrlTemplate(urlStr, tpls, optMaps, xctx, notes);
     if (tplLit.needsCrypto) needsCrypto = true;
     jsLines.push("let url = `" + tplLit.literal + "`;");
     jsLines.push("let httpParams = " + bp.literal + ";");
@@ -276,7 +292,7 @@ function buildRequestInfo(urlRule, ctx, role) {
     jsLines.push("return " + ret + "};");
   } else if (!simple || options) {
     // 复杂模板或带选项 → @js: 脚本
-    var tplLit2 = jsUrlTemplate(urlStr, tpls, optMaps, ctx, notes);
+    var tplLit2 = jsUrlTemplate(urlStr, tpls, optMaps, xctx, notes);
     if (tplLit2.needsCrypto) needsCrypto = true;
     jsLines.push("let url = `" + tplLit2.literal + "`;");
     var ret2 = "{url: url";

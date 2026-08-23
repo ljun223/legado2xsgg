@@ -103,6 +103,22 @@
 | `java.getCookie(...)` | 置空 + 提示（App 自动携带 Cookie） | — |
 | 其余（文件/zip/TTF/字体/setContent/getString 等） | 保留原样 + unsupported 提示 | — |
 
+### 上下文变量映射（JS 内，按两 App 管线语义对齐）
+
+两 App 管线均为：搜索/分类 → 详情 → 目录 → 正文，每步解析结果可被后续步骤引用。
+
+| 开源阅读（Legado） | 香色闺阁（XSGG） | 说明 |
+|---|---|---|
+| `baseUrl`（字段级 JS） | `params.responseUrl` | 当前模块收到的页面 URL；**每个模块内容不同**（搜索页/详情页/目录页/正文页） |
+| `baseUrl`（目录/正文 requestInfo） | `result`（占位符 `%@result`） | 上一步传入的 URL |
+| `baseUrl`（搜索/分类 requestInfo） | `config.host` | 入口模块即站点地址 |
+| `result` | `result` | 两端同义：整页 HTML / 选择器取值后的结果 |
+| `book.name / author / kind / intro / coverUrl / wordCount / lastChapter / bookUrl` | `params.queryInfo.bookName / author / cat / desc / cover / wordCount / lastChapterTitle / detailUrl` | 上游解析结果；其余 book.* 直映同名并提示确认 |
+| `chapter.url` | `params.responseUrl` | 本章页 URL |
+| `chapter.title` | `params.queryInfo.title` | 推断映射，异常请人工调整 |
+| `source.sourceUrl` | `config.host` | 书源站点地址 |
+| `source.headerMap / loginHeader` | `config.httpHeaders` | 请求头 |
+
 需要 CryptoJS 的规则会在值首行注入 `cryptojs=<CryptoJS 源码>` 前缀（自包含、离线可用）；若确认目标 App 支持 `<script src>` 引用外部 .js，也可改为 CDN 引用以减小书源体积。
 
 ## 分类 exploreUrl → bookWorld.分类（重点）

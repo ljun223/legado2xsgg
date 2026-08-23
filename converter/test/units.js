@@ -94,7 +94,7 @@ test("jsRule: 翻译 base64/encodeURI/timeFormat/log", function () {
   eq(jsRule.translateJs("java.encodeURI(url)", {}).code, "encodeURIComponent(String(url))");
   ok(jsRule.translateJs('java.timeFormat("yyyy-MM-dd")', {}).code.indexOf("getFullYear") !== -1, "timeFormat 应生成日期 IIFE");
   eq(jsRule.translateJs("log(result)", {}).code, "console.log(result)");
-  eq(jsRule.translateJs("baseUrl", {}).code, "config.host");
+  eq(jsRule.translateJs("baseUrl", {}).code, "params.responseUrl");
   eq(jsRule.translateJs("src", {}).code, "result");
 });
 
@@ -235,7 +235,7 @@ tests.forEach(function (t) {
 // ---------- {{@@}} 内联 与 ||@js: 组装 ----------
 test("rules: @js 后缀组装为 ||@js:", function () {
   var r = rules.convertRule("img@src@js:baseUrl+result", BASE);
-  eq(r.value, "//img/@src||@js:\nreturn (config.host+result);");
+  eq(r.value, "//img/@src||@js:\nreturn (params.responseUrl+result);");
 });
 test("rules: {{@@规则}} 内联求值等价转换", function () {
   var a = rules.convertRule("@js:baseUrl+{{@@img@src}}", BASE);
@@ -291,7 +291,7 @@ test("rules: 多 XPath 占位符 → concat()", function () {
 });
 test("rules: {{JS 表达式}} → @js: 块", function () {
   var r = rules.convertRule('{{baseUrl+"/x"}}', BASE);
-  ok(r.value.indexOf("@js:") === 0 && r.value.indexOf("config.host") !== -1, "应翻译为 @js: 块并映射 baseUrl");
+  ok(r.value.indexOf("@js:") === 0 && r.value.indexOf("params.responseUrl") !== -1, "应翻译为 @js: 块并映射 baseUrl→responseUrl");
 });
 
 test("modules: bookWorld 页码表达式归一化 → _type 模式", function () {
@@ -342,6 +342,25 @@ test("convertAll: 阅读导出格式 {\"0\":{...}} 与警告 source 标记", fun
   eq(Object.keys(r.output).length, 1);
   var w2 = converter.convertAll({ bookSourceType: 2, bookSourceName: "C", bookSourceUrl: "https://c.com", searchUrl: "/s" }, {}).warnings;
   ok(w2.some(function (w) { return w.source === "C"; }), "警告应带 source 字段");
+});
+
+test("jsRule: baseUrl 字段级映射 responseUrl", function () {
+  eq(jsRule.translateJs('baseUrl+"/x"', {}).code, 'params.responseUrl+"/x"');
+});
+test("jsRule: book.* → params.queryInfo.* 字段名对齐", function () {
+  eq(jsRule.translateJs("book.name", {}).code, "params.queryInfo.bookName");
+  eq(jsRule.translateJs("book.lastChapter", {}).code, "params.queryInfo.lastChapterTitle");
+  eq(jsRule.translateJs("book.bookUrl", {}).code, "params.queryInfo.detailUrl");
+});
+test("jsRule: chapter.url / source.sourceUrl 映射", function () {
+  eq(jsRule.translateJs("chapter.url", {}).code, "params.responseUrl");
+  eq(jsRule.translateJs("source.sourceUrl", {}).code, "config.host");
+});
+test("urlRule: 请求上下文 baseUrl 按角色映射", function () {
+  var toc = urlRule.buildRequestInfo("/x/{{baseUrl}}/list", { src: { bookSourceUrl: "https://x.com" } }, "toc").requestInfo;
+  ok(toc.indexOf("${result}") !== -1 && toc.indexOf("config.host") === -1, "目录请求应映射为 result");
+  var sea = urlRule.buildRequestInfo("/x/{{baseUrl}}", { src: { bookSourceUrl: "https://x.com" } }, "search").requestInfo;
+  ok(sea.indexOf("config.host") !== -1, "搜索入口应映射为 config.host");
 });
 
 console.log("");
