@@ -311,3 +311,19 @@ test("modules: bookWorld 各行表达式不同 → 运行时求值方案", funct
 console.log("");
 console.log(failures === 0 ? "全部通过（" + tests.length + " 项）" : failures + " 项失败");
 process.exit(failures === 0 ? 0 : 1);
+
+// ---------- ensureReturn：Legado 最后一行求值语义 ----------
+test("ensureReturn: 多语句保持原样并追加 return 末行", function () {
+  var got = rules.ensureReturn("var a = result.length;\nvar b = a * 2;\na + b");
+  eq(got, "var a = result.length;\nvar b = a * 2;\na + b\nreturn (a + b);");
+});
+test("ensureReturn: 已含 return 原样保留", function () {
+  var code = 'if (result) {\n  return "a";\n}\n"b"';
+  eq(rules.ensureReturn(code), code);
+});
+test("ensureReturn: 单行表达式直接包裹不重复", function () {
+  eq(rules.ensureReturn('result.replace(/x/g,"")'), 'return (result.replace(/x/g,""));');
+});
+test("ensureReturn: 末行为声明时回退原样", function () {
+  eq(rules.ensureReturn("var c = result;"), "var c = result;");
+});

@@ -1624,11 +1624,67 @@ function cleanupToJs(cleanup) {
 }
 
 // 确保 JS 代码有返回值：若无显式 return，包装为 return (...)
+/** 去除行尾 // 注释（字符串内的 // 不算）。 */
+function stripLineComment(s) {
+  var q = null;
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i);
+    if (q) {
+      if (ch === "\\") { i++; continue; }
+      if (ch === q) q = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { q = ch; continue; }
+    if (ch === "/" && s.charAt(i + 1) === "/") return s.slice(0, i);
+  }
+  return s;
+}
+
+function jsSyntaxOk(js) {
+  try {
+    new Function(js);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// 确保 JS 块有返回值。Legado/Rhino 语义：执行全部语句，取最后一行的求值结果。
+// 因此保持代码块原样，仅在缺少 return 时追加「return (最后一个非空语句行)」；
+// 若末行不是可返回的表达式（多行表达式续行等），回退为整体单表达式包裹；均失败则原样保留。
 function ensureReturn(code) {
-  var c = code.trim();
-  if (/^(return|throw|function)\b/.test(c)) return c;
+  var c = String(code == null ? "" : code).trim();
+  if (!c) return c;
+  if (/^(return|throw)\b/.test(c)) return c;
   if (/\breturn\b/.test(c)) return c;
-  return "return (" + c + ");";
+
+  var lines = c.split("\n");
+  var lastExpr = null;
+  for (var i = lines.length - 1; i >= 0; i--) {
+    var s = stripLineComment(lines[i]).trim();
+    if (!s) continue;
+    if (/^(\/\/|\*|\/\*)/.test(s)) continue;
+    lastExpr = s;
+    break;
+  }
+  if (lastExpr) {
+    var expr = lastExpr.replace(/[;\s]+$/, "");
+    var badStart = /^(var|let|const|if|for|while|do|switch|try|catch|finally|function|else|throw)\b/.test(expr)
+        || /^[})\]]/.test(expr);
+    if (expr && !badStart) {
+      // 整块就是这一个表达式：直接包裹，避免内容重复
+      var cBare = c.replace(/[;\s]+$/, "");
+      if (expr === cBare) {
+        var candSingle = "return (" + expr + ");";
+        if (jsSyntaxOk(candSingle)) return candSingle;
+      }
+      var cand1 = c + "\nreturn (" + expr + ");";
+      if (jsSyntaxOk(cand1)) return cand1;
+    }
+  }
+  var cand2 = "return (" + c + ");";
+  if (jsSyntaxOk(cand2)) return cand2;
+  return c;
 }
 
 /**
@@ -1924,7 +1980,11 @@ function convertOne(rule, ctx) {
     jsLines.push("var _r = (function(){" + jsResult.code + "})();");
     jsLines.push("return " + cleanupToJs(cleanup).replace("result", "_r") + ";");
   } else if (jsResult !== null) {
-    jsLines.push(ensureReturn(jsResult.code));
+    var ensured = ensureReturn(jsResult.code);
+    if (!/\breturn\b/.test(ensured)) {
+      warnings.push({ level: "degraded", msg: "JS 块无返回值且无法自动推断（已原样保留），请人工补充 return 语句" });
+    }
+    jsLines.push(ensured);
   } else if (cleanup !== null) {
     jsLines.push("return " + cleanupToJs(cleanup) + ";");
   }

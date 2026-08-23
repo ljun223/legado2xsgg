@@ -61,6 +61,7 @@
 ### 复杂语法处理
 - 尾部 `##正则##替换`：转换为 `xpath||@js:` 后处理（`return result.replace(...)`），替换内容为空时第二 `##` 省略；`##...##...###`（OnlyOne，只取第一个匹配）用非全局 replace。
 - 规则尾部 `<js>代码</js>` 或 `@js:代码`：与选择器组合时输出 `xpath||@js:` 形态（`result` 为选择器取值，`baseUrl`→`config.host`）；纯 JS 规则输出 `@js:` 块。
+- **JS 块返回值**：保持代码块原样不改写（Legado/Rhino 语义=执行全部语句取最后一行求值结果）；仅当块内无 return 时在末尾追加 `return (最后一个非空语句行);`，末行非表达式（声明/续行等）则回退整体单表达式包裹，均失败原样保留并提示人工补充 return。
 - **`{{@@规则}}` 在 @js: 内**：`@js:baseUrl+{{@@img@src}}` ≡ `img@src@js:baseUrl+result`，统一转换为 `//img/@src||@js:\nreturn config.host+result;`（仅支持单个占位符且子规则可转纯选择器）。
 - **`{{}}` 嵌套求值**（可出现在任意位置；占位符内 `@@`=Default、`@xpath:`/`//`=XPath、`@css:`=CSS、`@json:`/`$`=JSONPath、无前缀=JS）：
   - 整条规则即单个 `{{X}}` → 解包为对应解析规则：`{{@@img@data-src}}` → `//img/@data-src`；`{{$.chapter.body}}` → JSONPath 透传（仅 JSON 模块）；纯 JS 表达式 → `@js:` 块（翻译 java.* 与 baseUrl/src）；
