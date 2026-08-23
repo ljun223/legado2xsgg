@@ -21,7 +21,7 @@ var BASE = { src: {}, host: "https://x.com", jsonEnabled: false };
 // ---------- defaultRule ----------
 test("Default: class. 类型与位置", function () {
   eq(defaultRule.convertDefault("class.odd.0@tag.a.0@text", BASE).xpath,
-     '//*[contains(@class,"odd")][1]//a[1]/text()');
+     '((//*[contains(@class,"odd")])[1]//a)[1]/text()');
 });
 test("Default: #id 后代链", function () {
   eq(defaultRule.convertDefault("#fmimg img@data-original", BASE).xpath,
@@ -37,9 +37,9 @@ test("Default: CSS 式裸选择器 + 属性", function () {
 });
 test("Default: 排除 ! 与位置", function () {
   eq(defaultRule.convertDefault("class.x.0!1@text", BASE).xpath,
-     '//*[contains(@class,"x")][1 and not(2)]/text()');
+     '(//*[contains(@class,"x")])[1 and not(2)]/text()');
   eq(defaultRule.convertDefault("li.3@text", BASE).xpath,
-     '//li[4]/text()');
+     '(//li)[4]/text()');
 });
 test("Default: html 内容操作", function () {
   var r = defaultRule.convertDefault("id.booktxt@html", { field: "content" });
@@ -49,7 +49,7 @@ test("Default: html 内容操作", function () {
 // ---------- cssRule ----------
 test("CSS: 后代/类/id", function () {
   eq(cssRule.convertCss("@css:.item a@href", BASE).xpath, '//*[contains(@class,"item")]//a/@href');
-  eq(cssRule.convertCss("@css:#list li:first@text", BASE).xpath, '//*[@id="list"]//li[1]/text()');
+  eq(cssRule.convertCss("@css:#list li:first@text", BASE).xpath, '(//*[@id="list"]//li)[1]/text()');
 });
 
 // ---------- rules ----------
@@ -167,9 +167,9 @@ test("modules: bookWorld _type 模式", function () {
   eq(key, "分类");
   eq(bw[key].requestInfo, "@js:\nlet {_type}=params.filters\nlet url=`/${_type}/${params.pageIndex}.html`;\n\nreturn {url:url}");
   eq(bw[key].moreKeys.requestFilters, "_type\n玄幻::xh\n武侠::wx");
-  eq(bw[key].bookName, "//a[1]/@title");
-  eq(bw[key].wordCount, "//em[1]/text()");
-  eq(bw[key].lastChapterTitle, "//em[2]/text()");
+  eq(bw[key].bookName, "(//a)[1]/@title");
+  eq(bw[key].wordCount, "(//em)[1]/text()");
+  eq(bw[key].lastChapterTitle, "(//em)[2]/text()");
 });
 test("modules: bookWorld 逐行模式（格式二数组 + 分页拼接）", function () {
   var ctx = { src: mkSrc({ exploreUrl: "玄幻::/xh/{{page}}.html\n武侠::https://y.com/wx/{{page}}.html" }), host: "https://x.com", jsonEnabled: false };
@@ -360,6 +360,22 @@ test("urlRule: 请求上下文 baseUrl 按角色映射", function () {
   ok(toc.indexOf("${result}") !== -1 && toc.indexOf("config.host") === -1, "目录请求应映射为 result");
   var sea = urlRule.buildRequestInfo("/x/{{baseUrl}}", { src: { bookSourceUrl: "https://x.com" } }, "search").requestInfo;
   ok(sea.indexOf("config.host") !== -1, "搜索入口应映射为 config.host");
+});
+
+test("Default: 裸词全为标签（div@ul@li）", function () {
+  eq(defaultRule.convertDefault("div@ul@li", BASE).xpath, "//div//ul//li");
+});
+test("Default: 简写 . 与 # 等价 class./id.", function () {
+  eq(defaultRule.convertDefault(".item a@href", BASE).xpath,
+     defaultRule.convertDefault("class.item@tag.a@href", BASE).xpath);
+  eq(defaultRule.convertDefault("#fmimg img", BASE).xpath,
+     defaultRule.convertDefault("id.fmimg@img", BASE).xpath);
+});
+test("CSS: 子代轴与 Default 后代轴区分", function () {
+  var c = cssRule.convertCss("@css:.item>a@text", BASE).xpath;
+  ok(c.indexOf("/a/") !== -1 || c.slice(-3) === "/a" , "子代轴应为 /");
+  var d2 = defaultRule.convertDefault("class.item@a@text", BASE).xpath;
+  ok(d2.indexOf("//a") !== -1, "Default 应为后代 //a");
 });
 
 console.log("");

@@ -48,6 +48,7 @@ function attrPredicateToXpath(bracket) {
 function parseCompound(tok, ctx, notes) {
   var tag = "*";
   var preds = [];
+  var posPreds = [];
   var i = 0;
   var n = tok.length;
   var first = true;
@@ -126,7 +127,7 @@ function parseCompound(tok, ctx, notes) {
           first = false;
           continue;
       }
-      preds.push(pr);
+      (pr === "1" || /^position()/.test(pr) || /^\d+$/.test(pr)) ? posPreds.push(pr) : preds.push(pr);
       i += pm[0].length;
       first = false;
       continue;
@@ -138,7 +139,7 @@ function parseCompound(tok, ctx, notes) {
     }
     return { error: "选择器无法解析: " + tok + "（位置 " + i + "）" };
   }
-  return { tag: tag, preds: preds };
+  return { tag: tag, preds: preds, posPred: posPreds.length ? posPreds.join(" and ") : null };
 }
 
 // 选择器链（不含内容提取）→ XPath
@@ -171,23 +172,27 @@ function selectorToXpathChain(selector, ctx) {
   if (buf) tokens.push({ sel: buf, comb: comb });
   if (!tokens.length) return { error: "空选择器", notes: notes };
 
-  var parts = [];
+  var acc = null;   // 累积表达式（支持 :eq/:first 等作用域正确的列表取位）
   for (var t = 0; t < tokens.length; t++) {
     var pc = parseCompound(tokens[t].sel, ctx, notes);
     if (pc.error) return { error: pc.error, notes: notes };
     var stepXp = pc.tag + (pc.preds.length ? "[" + pc.preds.join(" and ") + "]" : "");
     var comb2 = tokens[t].comb;
-    if (t === 0) {
-      parts.push("//" + stepXp);
-    } else if (comb2 === ">") {
-      parts.push("/" + stepXp);
-    } else if (comb2 === "+") {
-      parts.push("/following-sibling::" + stepXp + "[1]");
-    } else {
-      parts.push("//" + stepXp);
+    var sep;
+    if (t === 0) sep = "//";
+    else if (comb2 === ">") sep = "/";
+    else if (comb2 === "+") sep = "/following-sibling::";
+    else sep = "//";
+    if (comb2 === "+") {
+      // 相邻兄弟：取第一个匹配（保持旧行为）
+      var sibBody = (acc === null ? "" : acc) + sep + stepXp;
+      acc = "(" + sibBody + ")[1]";
+      continue;
     }
+    var body2 = (acc === null ? "" : acc) + sep + stepXp;
+    acc = pc.posPred ? "(" + body2 + ")[" + pc.posPred + "]" : body2;
   }
-  return { xpath: parts.join(""), notes: notes };
+  return { xpath: acc === null ? "" : acc, notes: notes };
 }
 
 // 完整 @css: 规则 → XPath

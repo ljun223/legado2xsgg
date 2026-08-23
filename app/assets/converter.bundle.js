@@ -155,6 +155,26 @@ function isLiteralText(s) {
 
 // 将 -1 -> last() 之类的位置索引转 XPath 谓词
 // index 为 0 起始，负数表示倒数
+// 判断谓词是否为纯位置类（数字/last()/position() 及其 and/or/not 组合）
+function isPositionalPred(pred) {
+  var s0 = String(pred == null ? "" : pred).trim();
+  if (!s0) return false;
+  var parts = s0.split(/\s+(?:and|or)\s+/);
+  for (var i = 0; i < parts.length; i++) {
+    var t = parts[i].trim();
+    if (/^not\s*\(/.test(t)) {
+      if (!/\)$/.test(t)) return false;
+      t = t.slice(3).replace(/^\(/, "").replace(/\)$/, "").trim();
+    }
+    if (/^\d+$/.test(t)) continue;
+    if (/^last\(\)$/.test(t)) continue;
+    if (/^last\(\)\s*-\s*\d+$/.test(t)) continue;
+    if (/^position\(\)\s*(=|>=|<=|>|<)\s*(last\(\)(\s*-\s*\d+)?|\d+)$/.test(t)) continue;
+    return false;
+  }
+  return true;
+}
+
 function indexPredicate(index) {
   if (index >= 0) return "[" + (index + 1) + "]";
   var k = -index - 1; // -1->0, -2->1
@@ -211,6 +231,7 @@ module.exports = {
   escStr: escStr,
   isLiteralText: isLiteralText,
   indexPredicate: indexPredicate,
+  isPositionalPred: isPositionalPred,
   indexToPosExpr: indexToPosExpr,
   normalizeOrigin: normalizeOrigin,
   originOf: originOf,
@@ -259,11 +280,29 @@ function mapContentOp(op, field) {
     case "src":
       xpath = "/@src";
       break;
-    default:
+    default: {
+      // 歧义消解：常见 HTML 标签名按标签处理（div@ul@li 的 li 是节点而非属性）
+      if (HTML_TAGS[op]) {
+        xpath = "//" + op;
+        notes.push("末段 " + op + " 已按标签解析（同名写法歧义），如需取属性请人工确认");
+        break;
+      }
       xpath = "/@" + op; // 其他一律视为属性名
+    }
   }
   return { xpath: xpath, notes: notes };
 }
+
+// 常见 HTML 标签名集合（用于裸词歧义消解：div@ul@li 的 li 是节点而非属性）
+// 注意：title/content/name 等同时是高频属性名，不纳入集合
+var HTML_TAGS = {};
+var _tagList = ("a,abbr,address,area,article,aside,audio,b,bdi,bdo,blockquote,body,br,button,canvas,caption,cite,code," +
+    "col,colgroup,datalist,dd,del,details,dfn,dialog,div,dl,dt,em,embed,fieldset,figcaption,figure,footer,form," +
+    "h1,h2,h3,h4,h5,h6,head,header,hgroup,hr,i,iframe,img,input,ins,kbd,label,legend,li,link,main,map,mark,menu," +
+    "meta,meter,nav,noscript,object,ol,optgroup,option,output,p,param,picture,pre,progress,q,rp,rt,ruby,s,samp," +
+    "script,section,select,small,source,span,strong,style,sub,summary,sup,table,tbody,td,template,textarea,tfoot," +
+    "th,thead,time,tr,track,u,ul,var,video,wbr").split(",");
+for (var _ti = 0; _ti < _tagList.length; _ti++) HTML_TAGS[_tagList[_ti]] = 1;
 
 function isContentOp(op) {
   return CONTENT_OPS.indexOf(op) !== -1;
@@ -378,11 +417,18 @@ function parseSegment(seg, ctx) {
     var spec = parseArraySpec(seg);
     if (!spec) return { error: "数组索引语法过复杂: " + seg };
     var r0 = arraySpecPredicates(spec);
+    var allPos0 = true;
+    for (var a0 = 0; a0 < r0.preds.length; a0++) {
+      if (!utils.isPositionalPred(r0.preds[a0])) { allPos0 = false; break; }
+    }
+    if (allPos0) {
+      return { xpath: "/*", indexPred: r0.preds.join(" and "), notes: notes.concat(r0.notes) };
+    }
     return { xpath: "/*" + (r0.preds.length ? "[" + r0.preds.join(" and ") + "]" : ""), notes: notes.concat(r0.notes) };
   }
   if (/^\.-?\d+$/.test(seg)) {
     var n1 = parseInt(seg.slice(1), 10);
-    return { xpath: "/*" + utils.indexPredicate(n1), notes: notes };
+    return { xpath: "/*", indexPred: String(n1 + 1), notes: notes };
   }
 
   var type = null, rest = seg;
@@ -533,19 +579,23 @@ function parseSegment(seg, ctx) {
   }
 
   var preds = [];
+  var idxParts = [];
   if (containsText !== null) {
     preds.push('contains(text(),"' + escAttr(containsText) + '")');
   }
   if (tagPreds) preds = preds.concat(tagPreds);
-  if (position !== null) preds.push(indexToPosExpr(position));
-  if (exclusion) preds.push("not(" + exclusion.map(indexToPosExpr).join(" or ") + ")");
+  if (position !== null) idxParts.push(indexToPosExpr(position));
+  if (exclusion) idxParts.push("not(" + exclusion.map(indexToPosExpr).join(" or ") + ")");
   if (arraySpec) {
     var r2 = arraySpecPredicates(arraySpec);
-    preds = preds.concat(r2.preds);
+    for (var a2 = 0; a2 < r2.preds.length; a2++) {
+      if (utils.isPositionalPred(r2.preds[a2])) idxParts.push(r2.preds[a2]);
+      else preds.push(r2.preds[a2]);
+    }
     notes = notes.concat(r2.notes);
   }
   if (preds.length) xp += "[" + preds.join(" and ") + "]";
-  return { xpath: xp, notes: notes };
+  return { indexPred: idxParts.length ? idxParts.join(" and ") : null, xpath: xp, notes: notes };
 }
 
 // 主入口：Default 规则（不含 ## 净化、不含 @js:、不含 ||）
@@ -553,7 +603,8 @@ function parseSegment(seg, ctx) {
 function convertDefault(rule, ctx) {
   var notes = [];
   var segs = utils.splitTopLevel(rule, ["@"]);
-  var parts = [];
+  var acc = null;          // 累积 XPath 表达式
+  var closed = false;      // 内容操作已拼接
   for (var i = 0; i < segs.length; i++) {
     var seg = segs[i].trim();
     if (!seg) continue;
@@ -561,25 +612,44 @@ function convertDefault(rule, ctx) {
     if (isLast && !hasTypePrefix(seg) && seg[0] !== "." && seg[0] !== "#" && seg[0] !== "[") {
       // 末段裸词 = 内容操作或属性
       var m = mapContentOp(seg, ctx.field);
-      parts.push(m.xpath);
+      acc = (acc === null ? "" : acc) + m.xpath;
+      closed = true;
       notes = notes.concat(m.notes);
       continue;
+    }
+    if (closed) {
+      return { error: "内容操作（" + seg + "）后不能再出现选择器段", notes: notes };
     }
     var r = parseSegment(seg, ctx);
     if (r.error) {
       return { error: "Default 规则段解析失败: " + seg + "（" + r.error + "）", notes: notes };
     }
     notes = notes.concat(r.notes);
-    if (parts.length === 0) {
-      parts.push(r.xpath.indexOf("/*") === 0 ? "//" + r.xpath.slice(1) : r.xpath);
-    } else if (r.xpath === "/*" || r.xpath.indexOf("/*[") === 0) {
-      parts.push(r.xpath);
+    var xp = r.xpath;
+    var childSpecial = xp === "/*" || xp.indexOf("/*[") === 0;
+    var core, sep;
+    if (childSpecial) {
+      core = xp.slice(1);   // '*' 或 '*[...]'
+      sep = "/";
+    } else if (xp.indexOf("//") === 0) {
+      core = xp.slice(2);
+      sep = "//";
     } else {
-      parts.push("//" + r.xpath.slice(2));
+      core = xp;
+      sep = "//";
+    }
+    if (r.indexPred) {
+      // Legado 索引语义：在当前作用域取整个节点集的第 N 个 → (累积路径//core)[N]
+      var bodyStr = (acc === null ? "" : acc) + sep + core;
+      acc = "(" + bodyStr + ")[" + r.indexPred + "]";
+    } else {
+      acc = (acc === null ? xp : acc + sep + core);
     }
   }
-  if (!parts.length) return { error: "空规则", notes: notes };
-  return { xpath: parts.join(""), notes: notes };
+  if (acc === null || acc === "") {
+    return { error: "空规则", notes: notes };
+  }
+  return { xpath: acc, notes: notes };
 }
 
 module.exports = {
@@ -641,6 +711,7 @@ function attrPredicateToXpath(bracket) {
 function parseCompound(tok, ctx, notes) {
   var tag = "*";
   var preds = [];
+  var posPreds = [];
   var i = 0;
   var n = tok.length;
   var first = true;
@@ -719,7 +790,7 @@ function parseCompound(tok, ctx, notes) {
           first = false;
           continue;
       }
-      preds.push(pr);
+      (pr === "1" || /^position()/.test(pr) || /^\d+$/.test(pr)) ? posPreds.push(pr) : preds.push(pr);
       i += pm[0].length;
       first = false;
       continue;
@@ -731,7 +802,7 @@ function parseCompound(tok, ctx, notes) {
     }
     return { error: "选择器无法解析: " + tok + "（位置 " + i + "）" };
   }
-  return { tag: tag, preds: preds };
+  return { tag: tag, preds: preds, posPred: posPreds.length ? posPreds.join(" and ") : null };
 }
 
 // 选择器链（不含内容提取）→ XPath
@@ -764,23 +835,27 @@ function selectorToXpathChain(selector, ctx) {
   if (buf) tokens.push({ sel: buf, comb: comb });
   if (!tokens.length) return { error: "空选择器", notes: notes };
 
-  var parts = [];
+  var acc = null;   // 累积表达式（支持 :eq/:first 等作用域正确的列表取位）
   for (var t = 0; t < tokens.length; t++) {
     var pc = parseCompound(tokens[t].sel, ctx, notes);
     if (pc.error) return { error: pc.error, notes: notes };
     var stepXp = pc.tag + (pc.preds.length ? "[" + pc.preds.join(" and ") + "]" : "");
     var comb2 = tokens[t].comb;
-    if (t === 0) {
-      parts.push("//" + stepXp);
-    } else if (comb2 === ">") {
-      parts.push("/" + stepXp);
-    } else if (comb2 === "+") {
-      parts.push("/following-sibling::" + stepXp + "[1]");
-    } else {
-      parts.push("//" + stepXp);
+    var sep;
+    if (t === 0) sep = "//";
+    else if (comb2 === ">") sep = "/";
+    else if (comb2 === "+") sep = "/following-sibling::";
+    else sep = "//";
+    if (comb2 === "+") {
+      // 相邻兄弟：取第一个匹配（保持旧行为）
+      var sibBody = (acc === null ? "" : acc) + sep + stepXp;
+      acc = "(" + sibBody + ")[1]";
+      continue;
     }
+    var body2 = (acc === null ? "" : acc) + sep + stepXp;
+    acc = pc.posPred ? "(" + body2 + ")[" + pc.posPred + "]" : body2;
   }
-  return { xpath: parts.join(""), notes: notes };
+  return { xpath: acc === null ? "" : acc, notes: notes };
 }
 
 // 完整 @css: 规则 → XPath
@@ -959,25 +1034,23 @@ function translateJavaCall(name, args) {
     }
     case "utf8ToGbk":
       return {
-        expr: "String(" + args + ")",
-        crypto: false,
-        note: "java.utf8ToGbk 无浏览器端 GBK 编码器，已原样返回；GBK 搜索链接请人工处理"
+        keep: true,
+        msg: "java.utf8ToGbk 无浏览器端 GBK 编码器，已保留原样，请人工处理（或改用站点 UTF-8 接口）"
       };
     case "ajax":
     case "ajaxAll":
     case "connect":
     case "get":
     case "post":
+      // 联网取内容函数：XSGG 规则 JS 无对应能力，无法等价改写 → 保留原样
       return {
-        expr: "String(" + (splitArgs(args, 1)[0] || '""') + ")",
-        crypto: false,
-        note: "java." + name + "() 规则内联网无对应能力，已退化为取 URL 参数；请将请求改写到模块 requestInfo 配置"
+        keep: true,
+        msg: "java." + name + "() 是联网取内容函数，香色闺阁规则 JS 无对应能力，已保留原样；请改用模块 requestInfo 配置请求或人工改写"
       };
     case "getCookie":
       return {
-        expr: '""',
-        crypto: false,
-        note: "java.getCookie() 已置空：香色闺阁自动携带站点 Cookie，通常可直接删除该调用"
+        keep: true,
+        msg: "java.getCookie() 无法转换（XSGG 自动携带站点 Cookie，通常可整段删除该调用），已保留原样"
       };
     case "timeFormat":
       return {
@@ -1067,6 +1140,12 @@ function translateJs(code, ctx) {
       if (call) {
         var r = translateJavaCall(call.name, call.args);
         if (r) {
+          if (r.keep) {
+            notes.push(r.msg);
+            out += code.slice(i, call.end);
+            i = call.end;
+            continue;
+          }
           out += r.expr;
           if (r.crypto) needsCrypto = true;
           if (r.note) notes.push(r.note);
@@ -1261,6 +1340,12 @@ function exprToJs(expr, ctx) {
       if (call) {
         var r = jsRule.translateJavaCall(call.name, call.args);
         if (r) {
+          if (r.keep) {
+            notes.push(r.msg);
+            out += e.slice(i, call.end);
+            i = call.end;
+            continue;
+          }
           out += r.expr;
           if (r.crypto) needsCrypto = true;
           if (r.note) notes.push(r.note);
@@ -1779,13 +1864,25 @@ function expandTemplate(body, ctx, warnings) {
   // 整条 = 单个占位符
   if (parts.length === 1 && parts[0].t === "ph") {
     var inner = parts[0].v;
-    if (!/^(@@|@XPath:|@css:|@json:|\/\/|\$)/.test(inner)) {
+    if (!/^(@@|@|@XPath:|@css:|@json:|\/\/|\$)/.test(inner)) {
       // 纯 JS 表达式占位符 → @js: 块
       var tr = jsRule.translateJs(inner, ctx);
       warnings.push.apply(warnings, tr.notes.map(function (n) { return { level: "degraded", msg: n }; }));
       return jsRule.wrapJsBlock([ensureReturn(tr.code)], ctx, tr.needsCrypto);
     }
     var sel = convertPlaceholder(inner, ctx, warnings);
+    var repA = null;
+    if (sel === null) {
+      var clA = utils.findCleanup(inner);
+      if (clA) {
+        var bA = inner.slice(0, clA.start);
+        var sA = convertPlaceholder(bA, ctx, []);
+        if (sA !== null && sA.type === "xp") {
+          repA = cleanupToJs(clA).replace(/^result/, "");
+          sel = sA;
+        }
+      }
+    }
     if (sel === null) {
       warnings.push({ level: "unsupported", msg: "{{" + inner + "}} 子规则无法转为纯选择器，已保留原样，需人工处理" });
       return null;
@@ -1794,8 +1891,13 @@ function expandTemplate(body, ctx, warnings) {
       warnings.push({ level: "degraded", msg: "JSONPath 占位符出现在非 JSON 模块（" + body + "），已保留原样，需人工处理" });
       return null;
     }
-    warnings.push({ level: "note", msg: "{{}} 已解包为对应解析规则：" + inner.slice(0, 40) });
-    return sel.type === "xp" ? sel.v : sel.jp;
+    if (sel.type === "xp") {
+      warnings.push({ level: "note", msg: "{{}} 已解包为对应解析规则：" + inner.slice(0, 40) });
+      if (repA) return sel.v + "||@js:\nreturn result" + repA + ";";
+      return sel.v;
+    }
+    warnings.push({ level: "note", msg: "{{}} 已解包为 JSONPath：" + inner.slice(0, 40) });
+    return sel.jp;
   }
 
   // 混合文本：逐个转换占位符
@@ -1805,15 +1907,30 @@ function expandTemplate(body, ctx, warnings) {
     if (parts[i].t === "text") { conv.push(parts[i]); continue; }
     phCount++;
     var inner2 = parts[i].v;
-    if (!/^(@@|@XPath:|@css:|@json:|\/\/|\$)/.test(inner2)) {
+    if (!/^(@@|@|@XPath:|@css:|@json:|\/\/|\$)/.test(inner2)) {
       warnings.push({ level: "unsupported", msg: "无前缀 JS 占位符与文本混合（" + body + "）无法自动改写，需人工处理（等价形态：选择器||@js:）" });
       return null;
     }
     var sel2 = convertPlaceholder(inner2, ctx, warnings);
+    var rep2 = null;
+    if (sel2 === null) {
+      // 兜底：选择器 + 内嵌 ##净化## → 净化链上移为整体 ||@js: 后处理
+      var cl2 = utils.findCleanup(inner2);
+      if (cl2) {
+        var bodyOnly = inner2.slice(0, cl2.start);
+        var selB = convertPlaceholder(bodyOnly, ctx, []);
+        if (selB !== null && selB.type === "xp") {
+          rep2 = cleanupToJs(cl2).replace(/^result/, "");
+          sel2 = selB;
+          warnings.push({ level: "note", msg: "{{}} 内嵌净化已上移为整体 ||@js: 后处理" });
+        }
+      }
+    }
     if (sel2 === null) {
       warnings.push({ level: "unsupported", msg: "{{" + inner2 + "}} 子规则无法转为纯选择器，已保留原样，需人工处理" });
       return null;
     }
+    if (rep2) sel2._rep = rep2;
     conv.push(sel2);
   }
 
@@ -1830,8 +1947,9 @@ function expandTemplate(body, ctx, warnings) {
       for (var k2 = 0; k2 < conv.length; k2++) {
         if (conv[k2].type !== undefined) {
           var chain = buildJsChain(conv, "result");
+          var repB = collectReps(conv);
           warnings.push({ level: "note", msg: "{{}} 嵌套已改写为 选择器||@js: 形态" });
-          return conv[k2].v + "||@js:\nreturn " + chain + ";";
+          return conv[k2].v + "||@js:\nreturn " + chain.replace(/;$/, "") + repB + ";";
         }
       }
     }
@@ -1846,8 +1964,10 @@ function expandTemplate(body, ctx, warnings) {
         args.push("(" + p.v + ")");
       }
     }
-    warnings.push({ level: "degraded", msg: "多个 {{}} 占位符已合并为 XPath concat()，若目标 App 解析异常请人工拆分" });
-    return "concat(" + args.join(",") + ")";
+    var repC = collectReps(conv);
+    warnings.push({ level: "degraded", msg: "多个 {{}} 占位符已合并为 XPath concat()" + (repC ? "，内嵌净化已上移为 ||@js: 后处理" : "") + "，若目标 App 解析异常请人工拆分" });
+    var base = "concat(" + args.join(",") + ")";
+    return repC ? base + "||@js:\nreturn result" + repC + ";" : base;
   }
 
   // 单 JSONPath 占位符 + 文本
@@ -1869,6 +1989,15 @@ function expandTemplate(body, ctx, warnings) {
   return null;
 }
 
+/** 汇总 conv 中各选择器条目的内嵌净化链（".replace(..)" 段）。 */
+function collectReps(conv) {
+  var outR = "";
+  for (var i = 0; i < conv.length; i++) {
+    if (conv[i] && conv[i]._rep) outR += conv[i]._rep;
+  }
+  return outR;
+}
+
 /** 把 body 切成 [{t:'text'|'ph', v}]；无占位符返回 null。 */
 function parseTemplate(body) {
   var out = [];
@@ -1887,8 +2016,13 @@ function parseTemplate(body) {
 
 /** 占位符内容 → {type:'xp'|'json', v}；JS 表达式/不可识别返回 null。 */
 function convertPlaceholder(inner, ctx, warnings) {
-  if (inner.indexOf("@@") === 0) {
-    var r = convertOne(inner.slice(2), ctx);
+  // Legado 实际兼容单 @ 前缀（{{@class.x}} ≡ {{@@class.x}}）；已知专用前缀优先
+  if (/^@(?!@|xpath:|css:|json:)/.test(inner)) {
+    return convertPlaceholder("@" + inner, ctx, warnings);
+  }
+  if (inner.indexOf("@@") === 0 || /^@(?!@|xpath:|css:|json:)/.test(inner)) {
+    var subInner = inner.indexOf("@@") === 0 ? inner.slice(2) : inner.slice(1);
+    var r = convertOne(subInner, ctx);
     warnings.push.apply(warnings, r.warnings);
     var v = String(r.value || "");
     if (!v || v.indexOf("@js:") !== -1 || v.indexOf("\n") !== -1 || v.indexOf(" || ") !== -1) return null;

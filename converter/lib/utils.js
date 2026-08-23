@@ -150,6 +150,26 @@ function isLiteralText(s) {
 
 // 将 -1 -> last() 之类的位置索引转 XPath 谓词
 // index 为 0 起始，负数表示倒数
+// 判断谓词是否为纯位置类（数字/last()/position() 及其 and/or/not 组合）
+function isPositionalPred(pred) {
+  var s0 = String(pred == null ? "" : pred).trim();
+  if (!s0) return false;
+  var parts = s0.split(/\s+(?:and|or)\s+/);
+  for (var i = 0; i < parts.length; i++) {
+    var t = parts[i].trim();
+    if (/^not\s*\(/.test(t)) {
+      if (!/\)$/.test(t)) return false;
+      t = t.slice(3).replace(/^\(/, "").replace(/\)$/, "").trim();
+    }
+    if (/^\d+$/.test(t)) continue;
+    if (/^last\(\)$/.test(t)) continue;
+    if (/^last\(\)\s*-\s*\d+$/.test(t)) continue;
+    if (/^position\(\)\s*(=|>=|<=|>|<)\s*(last\(\)(\s*-\s*\d+)?|\d+)$/.test(t)) continue;
+    return false;
+  }
+  return true;
+}
+
 function indexPredicate(index) {
   if (index >= 0) return "[" + (index + 1) + "]";
   var k = -index - 1; // -1->0, -2->1
@@ -206,6 +226,7 @@ module.exports = {
   escStr: escStr,
   isLiteralText: isLiteralText,
   indexPredicate: indexPredicate,
+  isPositionalPred: isPositionalPred,
   indexToPosExpr: indexToPosExpr,
   normalizeOrigin: normalizeOrigin,
   originOf: originOf,

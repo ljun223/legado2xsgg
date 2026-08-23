@@ -58,6 +58,12 @@ function exprToJs(expr, ctx) {
       if (call) {
         var r = jsRule.translateJavaCall(call.name, call.args);
         if (r) {
+          if (r.keep) {
+            notes.push(r.msg);
+            out += e.slice(i, call.end);
+            i = call.end;
+            continue;
+          }
           out += r.expr;
           if (r.crypto) needsCrypto = true;
           if (r.note) notes.push(r.note);

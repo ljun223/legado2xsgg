@@ -129,25 +129,23 @@ function translateJavaCall(name, args) {
     }
     case "utf8ToGbk":
       return {
-        expr: "String(" + args + ")",
-        crypto: false,
-        note: "java.utf8ToGbk 无浏览器端 GBK 编码器，已原样返回；GBK 搜索链接请人工处理"
+        keep: true,
+        msg: "java.utf8ToGbk 无浏览器端 GBK 编码器，已保留原样，请人工处理（或改用站点 UTF-8 接口）"
       };
     case "ajax":
     case "ajaxAll":
     case "connect":
     case "get":
     case "post":
+      // 联网取内容函数：XSGG 规则 JS 无对应能力，无法等价改写 → 保留原样
       return {
-        expr: "String(" + (splitArgs(args, 1)[0] || '""') + ")",
-        crypto: false,
-        note: "java." + name + "() 规则内联网无对应能力，已退化为取 URL 参数；请将请求改写到模块 requestInfo 配置"
+        keep: true,
+        msg: "java." + name + "() 是联网取内容函数，香色闺阁规则 JS 无对应能力，已保留原样；请改用模块 requestInfo 配置请求或人工改写"
       };
     case "getCookie":
       return {
-        expr: '""',
-        crypto: false,
-        note: "java.getCookie() 已置空：香色闺阁自动携带站点 Cookie，通常可直接删除该调用"
+        keep: true,
+        msg: "java.getCookie() 无法转换（XSGG 自动携带站点 Cookie，通常可整段删除该调用），已保留原样"
       };
     case "timeFormat":
       return {
@@ -237,6 +235,12 @@ function translateJs(code, ctx) {
       if (call) {
         var r = translateJavaCall(call.name, call.args);
         if (r) {
+          if (r.keep) {
+            notes.push(r.msg);
+            out += code.slice(i, call.end);
+            i = call.end;
+            continue;
+          }
           out += r.expr;
           if (r.crypto) needsCrypto = true;
           if (r.note) notes.push(r.note);

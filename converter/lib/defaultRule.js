@@ -39,11 +39,29 @@ function mapContentOp(op, field) {
     case "src":
       xpath = "/@src";
       break;
-    default:
+    default: {
+      // 歧义消解：常见 HTML 标签名按标签处理（div@ul@li 的 li 是节点而非属性）
+      if (HTML_TAGS[op]) {
+        xpath = "//" + op;
+        notes.push("末段 " + op + " 已按标签解析（同名写法歧义），如需取属性请人工确认");
+        break;
+      }
       xpath = "/@" + op; // 其他一律视为属性名
+    }
   }
   return { xpath: xpath, notes: notes };
 }
+
+// 常见 HTML 标签名集合（用于裸词歧义消解：div@ul@li 的 li 是节点而非属性）
+// 注意：title/content/name 等同时是高频属性名，不纳入集合
+var HTML_TAGS = {};
+var _tagList = ("a,abbr,address,area,article,aside,audio,b,bdi,bdo,blockquote,body,br,button,canvas,caption,cite,code," +
+    "col,colgroup,datalist,dd,del,details,dfn,dialog,div,dl,dt,em,embed,fieldset,figcaption,figure,footer,form," +
+    "h1,h2,h3,h4,h5,h6,head,header,hgroup,hr,i,iframe,img,input,ins,kbd,label,legend,li,link,main,map,mark,menu," +
+    "meta,meter,nav,noscript,object,ol,optgroup,option,output,p,param,picture,pre,progress,q,rp,rt,ruby,s,samp," +
+    "script,section,select,small,source,span,strong,style,sub,summary,sup,table,tbody,td,template,textarea,tfoot," +
+    "th,thead,time,tr,track,u,ul,var,video,wbr").split(",");
+for (var _ti = 0; _ti < _tagList.length; _ti++) HTML_TAGS[_tagList[_ti]] = 1;
 
 function isContentOp(op) {
   return CONTENT_OPS.indexOf(op) !== -1;
@@ -158,11 +176,18 @@ function parseSegment(seg, ctx) {
     var spec = parseArraySpec(seg);
     if (!spec) return { error: "数组索引语法过复杂: " + seg };
     var r0 = arraySpecPredicates(spec);
+    var allPos0 = true;
+    for (var a0 = 0; a0 < r0.preds.length; a0++) {
+      if (!utils.isPositionalPred(r0.preds[a0])) { allPos0 = false; break; }
+    }
+    if (allPos0) {
+      return { xpath: "/*", indexPred: r0.preds.join(" and "), notes: notes.concat(r0.notes) };
+    }
     return { xpath: "/*" + (r0.preds.length ? "[" + r0.preds.join(" and ") + "]" : ""), notes: notes.concat(r0.notes) };
   }
   if (/^\.-?\d+$/.test(seg)) {
     var n1 = parseInt(seg.slice(1), 10);
-    return { xpath: "/*" + utils.indexPredicate(n1), notes: notes };
+    return { xpath: "/*", indexPred: String(n1 + 1), notes: notes };
   }
 
   var type = null, rest = seg;
@@ -313,19 +338,23 @@ function parseSegment(seg, ctx) {
   }
 
   var preds = [];
+  var idxParts = [];
   if (containsText !== null) {
     preds.push('contains(text(),"' + escAttr(containsText) + '")');
   }
   if (tagPreds) preds = preds.concat(tagPreds);
-  if (position !== null) preds.push(indexToPosExpr(position));
-  if (exclusion) preds.push("not(" + exclusion.map(indexToPosExpr).join(" or ") + ")");
+  if (position !== null) idxParts.push(indexToPosExpr(position));
+  if (exclusion) idxParts.push("not(" + exclusion.map(indexToPosExpr).join(" or ") + ")");
   if (arraySpec) {
     var r2 = arraySpecPredicates(arraySpec);
-    preds = preds.concat(r2.preds);
+    for (var a2 = 0; a2 < r2.preds.length; a2++) {
+      if (utils.isPositionalPred(r2.preds[a2])) idxParts.push(r2.preds[a2]);
+      else preds.push(r2.preds[a2]);
+    }
     notes = notes.concat(r2.notes);
   }
   if (preds.length) xp += "[" + preds.join(" and ") + "]";
-  return { xpath: xp, notes: notes };
+  return { indexPred: idxParts.length ? idxParts.join(" and ") : null, xpath: xp, notes: notes };
 }
 
 // 主入口：Default 规则（不含 ## 净化、不含 @js:、不含 ||）
@@ -333,7 +362,8 @@ function parseSegment(seg, ctx) {
 function convertDefault(rule, ctx) {
   var notes = [];
   var segs = utils.splitTopLevel(rule, ["@"]);
-  var parts = [];
+  var acc = null;          // 累积 XPath 表达式
+  var closed = false;      // 内容操作已拼接
   for (var i = 0; i < segs.length; i++) {
     var seg = segs[i].trim();
     if (!seg) continue;
@@ -341,25 +371,44 @@ function convertDefault(rule, ctx) {
     if (isLast && !hasTypePrefix(seg) && seg[0] !== "." && seg[0] !== "#" && seg[0] !== "[") {
       // 末段裸词 = 内容操作或属性
       var m = mapContentOp(seg, ctx.field);
-      parts.push(m.xpath);
+      acc = (acc === null ? "" : acc) + m.xpath;
+      closed = true;
       notes = notes.concat(m.notes);
       continue;
+    }
+    if (closed) {
+      return { error: "内容操作（" + seg + "）后不能再出现选择器段", notes: notes };
     }
     var r = parseSegment(seg, ctx);
     if (r.error) {
       return { error: "Default 规则段解析失败: " + seg + "（" + r.error + "）", notes: notes };
     }
     notes = notes.concat(r.notes);
-    if (parts.length === 0) {
-      parts.push(r.xpath.indexOf("/*") === 0 ? "//" + r.xpath.slice(1) : r.xpath);
-    } else if (r.xpath === "/*" || r.xpath.indexOf("/*[") === 0) {
-      parts.push(r.xpath);
+    var xp = r.xpath;
+    var childSpecial = xp === "/*" || xp.indexOf("/*[") === 0;
+    var core, sep;
+    if (childSpecial) {
+      core = xp.slice(1);   // '*' 或 '*[...]'
+      sep = "/";
+    } else if (xp.indexOf("//") === 0) {
+      core = xp.slice(2);
+      sep = "//";
     } else {
-      parts.push("//" + r.xpath.slice(2));
+      core = xp;
+      sep = "//";
+    }
+    if (r.indexPred) {
+      // Legado 索引语义：在当前作用域取整个节点集的第 N 个 → (累积路径//core)[N]
+      var bodyStr = (acc === null ? "" : acc) + sep + core;
+      acc = "(" + bodyStr + ")[" + r.indexPred + "]";
+    } else {
+      acc = (acc === null ? xp : acc + sep + core);
     }
   }
-  if (!parts.length) return { error: "空规则", notes: notes };
-  return { xpath: parts.join(""), notes: notes };
+  if (acc === null || acc === "") {
+    return { error: "空规则", notes: notes };
+  }
+  return { xpath: acc, notes: notes };
 }
 
 module.exports = {
