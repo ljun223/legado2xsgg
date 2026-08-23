@@ -2613,7 +2613,7 @@ function buildBookWorld(src, ctx) {
     }
     if (!sigOk) { leftovers = leftovers.concat(grp); continue; }
 
-    // 尝试 _type：各 base 段数相同、恰好一段互异、其余全等、token 干净
+    // 尝试 _type：各 base 段数相同；互异列可为 1 列（单键）或多列（多键组合，如 /${f1}/${f2}）；其余列全等；token 干净
     var uniform = grp.length >= 2;
     var segsArr = [];
     if (uniform) {
@@ -2623,48 +2623,80 @@ function buildBookWorld(src, ctx) {
         segsArr.push(sg);
       }
     }
-    var diffIdx = -1;
+    var diffCols = [];
     if (uniform) {
       for (var si = 0; si < segsArr[0].length; si++) {
         var colDiff = false;
         for (var m3 = 1; m3 < segsArr.length; m3++) {
           if (segsArr[m3][si] !== segsArr[0][si]) { colDiff = true; break; }
         }
-        if (colDiff) {
-          if (diffIdx === -1) diffIdx = si;
-          else { uniform = false; }
-        }
+        if (colDiff) diffCols.push(si);
       }
-      if (diffIdx === -1) uniform = false;
+      if (!diffCols.length) uniform = false;
     }
-    var tokens = [];
+    var tokensByCol = [];
     if (uniform) {
-      for (var m4 = 0; m4 < grp.length; m4++) {
-        var tk = segsArr[m4][diffIdx];
-        if (!tk || /[?=&\s]/.test(tk) || tk.indexOf("{{") !== -1) { uniform = false; break; }
-        tokens.push(tk);
+      for (var d1 = 0; d1 < diffCols.length; d1++) {
+        var colTokens = [];
+        for (var m4 = 0; m4 < grp.length; m4++) {
+          var tk = segsArr[m4][diffCols[d1]];
+          if (!tk || /[?=&\s]/.test(tk) || tk.indexOf("{{") !== -1) { uniform = false; break; }
+          colTokens.push(tk);
+        }
+        if (!uniform) break;
+        tokensByCol.push(colTokens);
       }
     }
 
     if (uniform) {
       var skelSegs = segsArr[0].slice();
-      skelSegs[diffIdx] = "_TYPE_";
+      var keyNames = [];
+      for (var d2 = 0; d2 < diffCols.length; d2++) {
+        skelSegs[diffCols[d2]] = "_K" + d2 + "_";
+        keyNames.push(diffCols.length === 1 ? "_type" : "f" + (d2 + 1));
+      }
       var pgExprs = head.sig === "" ? [] : head.sig.split("\u0001");
       var pIdx = 0;
-      var urlTpl = skelSegs.join("/").replace("_TYPE_", "${_type}")
-          + "/" + head.tail + "{{page}}" + head.post;
+      var urlTpl = skelSegs.join("/") + "/" + head.tail + "{{page}}" + head.post;
+      for (var d3 = 0; d3 < keyNames.length; d3++) {
+        urlTpl = urlTpl.replace("_K" + d3 + "_", "${" + keyNames[d3] + "}");
+      }
       urlTpl = urlTpl.replace(/\{\{page\}\}/g, function () {
         pIdx++;
         return "${" + (pgExprs[pIdx] || "params.pageIndex") + "}";
       });
-      var filters3 = "_type";
-      for (var m6 = 0; m6 < grp.length; m6++) {
-        filters3 += "\n" + grp[m6].name + "::" + tokens[m6];
+      var filtersVal;
+      var riHead;
+      if (diffCols.length === 1) {
+        // 单键：保持格式三字符串（对齐手工基准）
+        var f3 = "_type";
+        for (var m6 = 0; m6 < grp.length; m6++) {
+          f3 += "\n" + grp[m6].name + "::" + tokensByCol[0][m6];
+        }
+        filtersVal = f3;
+        riHead = "let {_type}=params.filters";
+      } else {
+        // 多键：格式二数组，每列一个筛选变量（组合维度）
+        var arr2 = [];
+        for (var d4 = 0; d4 < diffCols.length; d4++) {
+          var its = [];
+          var seenV = {};
+          for (var m7 = 0; m7 < grp.length; m7++) {
+            var vv = tokensByCol[d4][m7];
+            if (seenV[vv]) continue;
+            seenV[vv] = 1;
+            its.push({ title: grp[m7].name, value: vv });
+          }
+          arr2.push({ key: keyNames[d4], items: its });
+        }
+        filtersVal = arr2;
+        riHead = "let {" + keyNames.join(",") + "}=params.filters";
       }
       pushEntry(null,
-          "@js:\nlet {_type}=params.filters\nlet url=`" + urlTpl + "`;\n\nreturn {url:url}",
-          filters3,
-          "分类页[" + (entries.length === 0 ? "分类" : "分类" + (entries.length + 1)) + "]：" + grp.length + " 个分类共享 URL 模板（_type）");
+          "@js:\n" + riHead + "\nlet url=`" + urlTpl + "`;\n\nreturn {url:url}",
+          filtersVal,
+          "分类页[" + (entries.length === 0 ? "分类" : "分类" + (entries.length + 1)) + "]：" + grp.length + " 个分类共享模板"
+              + (diffCols.length > 1 ? "（多维筛选 " + keyNames.join("/") + "）" : "（_type）"));
       continue;
     }
 
