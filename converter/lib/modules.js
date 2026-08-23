@@ -354,124 +354,174 @@ function buildBookWorld(src, ctx) {
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
 
-  // {{}} 页码模板归一化：{{page == 1 ? "" : page + ".html"}} 等算术/三元表达式 → {{page}}
+  // ===== 分类多分组：{{}} 归一化后按「tail+post 分页结构」聚合，可产出多个独立分类页 =====
+  // 每行分解为：base(根路径) + "/" + tail(连接段,可空) + {{页码表达式}} + post(后缀)
+  // 组内 base 仅一段互异且其余全等 → _type 格式三；否则 → 格式二拼接(order+"/"+tail+pageIndex+post)；
+  // 无法成组的单行 → 「更多」入口运行时求值。多个分组即多个 bookWorld 条目（多 filters）。
   var normLines = [];
-  var pgExprSig = null, allSameExpr = true, hasBad = false, badList = [], hasAnyTemplate = false;
+  var hasBad = false, badList = [];
   for (var ni = 0; ni < lines.length; ni++) {
     var nt = normalizePageTemplates(lines[ni].path);
-    if (nt.exprs.length) hasAnyTemplate = true;
     if (nt.bad.length) { hasBad = true; badList = badList.concat(nt.bad); }
-    var sig2 = nt.exprs.join("\u0001");
-    if (pgExprSig === null) pgExprSig = sig2;
-    else if (sig2 !== pgExprSig) allSameExpr = false;
-    normLines.push({ name: lines[ni].name, path: nt.norm });
+    var rawNorm = nt.norm;
+    var pi0 = rawNorm.indexOf("{{page}}");
+    var preI0 = pi0 === -1 ? rawNorm : rawNorm.slice(0, pi0);
+    var postI0 = pi0 === -1 ? "" : rawNorm.slice(pi0 + 8);
+    var lastSlash = preI0.lastIndexOf("/");
+    var baseP = lastSlash === -1 ? "" : preI0.slice(0, lastSlash).replace(/\/+$/, "");
+    var tailP = lastSlash === -1 ? preI0 : preI0.slice(lastSlash + 1);
+    if (baseP === "") baseP = "/";
+    normLines.push({
+      name: lines[ni].name,
+      raw: lines[ni].path,
+      base: baseP,
+      tail: tailP,
+      post: postI0,
+      exprs: nt.exprs,
+      sig: nt.exprs.join("\u0001")
+    });
   }
   if (hasBad) {
     warnings.push({ level: "degraded", msg: "分类 URL 含选择器型占位符（" + badList.slice(0, 3).join("、") + (badList.length > 3 ? "…" : "") + "），无法在分类入口求值，已原样保留，请人工处理" });
   }
 
-  var typeMode = (!hasBad && allSameExpr && hasAnyTemplate) ? analyzeTypeMode(normLines) : null;
-  if (typeMode) {
-    // _type 模式：共享 URL 模板 + 格式三筛选（对齐手工转换基准：小原文学网（香色闺阁）.json）
-    var filters = "_type";
-    for (var i = 0; i < normLines.length; i++) {
-      filters += "\n" + normLines[i].name + "::" + typeMode.tokens[i];
+  var entries = [];
+  var entrySeq = 0;
+  function pushEntry(keyHint, ri, filtersVal, noteMsg) {
+    entrySeq++;
+    var eName = keyHint || (entrySeq === 1 ? "分类" : "分类" + entrySeq);
+    var em = base("bookWorld", jctx.host, jctx.jsonEnabled);
+    Object.keys(p.out).forEach(function (k3) { em[k3] = p.out[k3]; });
+    em.requestInfo = ri;
+    em._sIndex = entries.length;
+    em.moreKeys = { pageSize: 20 };
+    if (filtersVal !== null) em.moreKeys.requestFilters = filtersVal;
+    entries.push({ key: eName, module: em });
+    if (noteMsg) warnings.push({ level: "note", msg: noteMsg });
+  }
+
+  // —— 按 (tail,post) 聚合 ——
+  var groupMap = {};
+  var groupOrder = [];
+  var leftovers = [];
+  for (var gi = 0; gi < normLines.length; gi++) {
+    var L0 = normLines[gi];
+    if (!L0.exprs.length) { leftovers.push(L0); continue; }
+    var gkey = L0.tail + "\u0001" + L0.post;
+    if (!groupMap[gkey]) { groupMap[gkey] = []; groupOrder.push(gkey); }
+    groupMap[gkey].push(L0);
+  }
+
+  for (var g2 = 0; g2 < groupOrder.length; g2++) {
+    var grp = groupMap[groupOrder[g2]];
+    var head = grp[0];
+    var sigOk = true;
+    for (var s1 = 1; s1 < grp.length; s1++) {
+      if (grp[s1].sig !== head.sig) { sigOk = false; break; }
     }
-    // {{page}} 标记按出现顺序替换为已翻译的页码表达式（支持算术/三元，如 page == 1 ? "" : page + ".html"）
-    var pgExprs = pgExprSig === "" ? [] : pgExprSig.split("\u0001");
-    var pgIdx = 0;
-    var urlTpl = typeMode.pattern.replace("_TYPE_", "${_type}") + "${" + (pgExprs[pgIdx] || "params.pageIndex") + "}" + typeMode.post;
-    urlTpl = urlTpl.replace(/\{\{page\}\}/g, function () {
-      pgIdx++;
-      return "${" + (pgExprs[pgIdx] || "params.pageIndex") + "}";
-    });
-    m.requestInfo = "@js:\nlet {_type}=params.filters\nlet url=`" + urlTpl + "`;\n\nreturn {url:url}";
-    m._sIndex = 0;
-    m.moreKeys = {
-      pageSize: 20,
-      requestFilters: filters
-    };
-    warnings.push({ level: "note", msg: "bookWorld 分类已写入 moreKeys.requestFilters（" + lines.length + " 个分类共享 URL 模板），pageSize 固定 20" });
-  } else {
-    // 逐行模式（无共享 URL 模板）：格式二筛选数组 + requestInfo JS 拼接分页
-    // 对齐手动转换基准：三四娱乐（手动分类）.json（params.filters.order + encodeURI）
-    var items = [];
-    var splittable = true;
-    var pageSeg = null;
-    var post = null;
-    var PAGE_WORDS = /^(page|p|index|pn|pagenum|pageindex)$/i;
-    for (var j = 0; j < lines.length; j++) {
-      var path = safeDecode(lines[j].path);
-      var pi = path.indexOf("{{page}}");
-      if (pi === -1) {
-        splittable = false;
-        break;
-      }
-      var preI = path.slice(0, pi);
-      var postI = path.slice(pi + 8);
-      var preTrim = preI.replace(/\/+$/, "");
-      var lastSeg = preTrim.split("/").pop() || "";
-      var hasTrail = preI.length > preTrim.length;
-      var isPageWord = hasTrail && PAGE_WORDS.test(lastSeg);
-      if (j === 0) {
-        pageSeg = isPageWord ? "/" + lastSeg + "/" : "";
-        post = postI;
-      } else if ((isPageWord ? "/" + lastSeg + "/" : "") !== pageSeg || postI !== post) {
-        splittable = false;
-        break;
+    if (!sigOk) { leftovers = leftovers.concat(grp); continue; }
+
+    // 尝试 _type：各 base 段数相同、恰好一段互异、其余全等、token 干净
+    var uniform = grp.length >= 2;
+    var segsArr = [];
+    if (uniform) {
+      for (var m2 = 0; m2 < grp.length; m2++) {
+        var sg = grp[m2].base.split("/");
+        if (m2 > 0 && sg.length !== segsArr[0].length) { uniform = false; break; }
+        segsArr.push(sg);
       }
     }
-    if (splittable && lines.length > 1) {
-      // 拼接方案：value = 分类根路径（去掉分页段），requestInfo 统一拼 pageIndex
-      for (var s = 0; s < lines.length; s++) {
-        var p2 = safeDecode(lines[s].path);
-        var pi2 = p2.indexOf("{{page}}");
-        var preI2 = p2.slice(0, pi2);
-        var preTrim2 = preI2.replace(/\/+$/, "");
-        var lastSeg2 = preTrim2.split("/").pop() || "";
-        var basePath = preTrim2;
-        if (pageSeg !== "") {
-          basePath = preTrim2.slice(0, preTrim2.length - lastSeg2.length).replace(/\/+$/, "");
+    var diffIdx = -1;
+    if (uniform) {
+      for (var si = 0; si < segsArr[0].length; si++) {
+        var colDiff = false;
+        for (var m3 = 1; m3 < segsArr.length; m3++) {
+          if (segsArr[m3][si] !== segsArr[0][si]) { colDiff = true; break; }
         }
-        if (basePath === "") basePath = "/";
-        items.push({ title: lines[s].name, value: basePath });
-        if (!/^https?:\/\//i.test(lines[s].path)) {
-          warnings.push({ level: "note", msg: "分类[" + lines[s].name + "] URL 为相对地址（" + basePath + "），将基于站点 host 拼接" });
+        if (colDiff) {
+          if (diffIdx === -1) diffIdx = si;
+          else { uniform = false; }
         }
       }
-      var tpl = pageSeg === ""
-          ? "params.filters.order + \"/\" + params.pageIndex" + (post ? " + \"" + post + "\"" : "")
-          : "params.filters.order + \"" + pageSeg + "\" + params.pageIndex" + (post ? " + \"" + post + "\"" : "");
-      m.requestInfo = "@js:\nlet url = " + tpl + "\n\nreturn encodeURI(url)";
-    } else {
-      // 运行时求值方案：value 保留完整路径，requestInfo 用 Function 求值任意 {{页码表达式}}
-      // （支持 {{page}}、{{(page-1)*20}}、{{page == 1 ? "" : page + ".html"}} 等全部形态）
-      for (var r = 0; r < lines.length; r++) {
-        var p3 = safeDecode(lines[r].path);
-        items.push({ title: lines[r].name, value: p3 });
-        if (!/^https?:\/\//i.test(lines[r].path)) {
-          warnings.push({ level: "note", msg: "分类[" + lines[r].name + "] URL 为相对地址（" + p3 + "），将基于站点 host 拼接" });
-        }
-      }
-      m.requestInfo = "@js:\nlet url = String(params.filters.order).replace(/\\{\\{([\\s\\S]*?)\\}\\}/g, function(_, e){\n"
-          + "  try {\n"
-          + "    var f = new Function('page', 'key', 'return (' + e + ')');\n"
-          + "    return String(f(params.pageIndex, params.keyWord));\n"
-          + "  } catch (err) {\n"
-          + "    return _;\n"
-          + "  }\n"
-          + "})\n\nreturn encodeURI(url)";
-      warnings.push({ level: "note", msg: "分类 URL 的 {{}} 表达式将在运行时按 page/key 求值（支持算术与三元表达式）" });
+      if (diffIdx === -1) uniform = false;
     }
-    m._sIndex = 0;
-    m.moreKeys = {
-      pageSize: 20,
-      requestFilters: [{ key: "order", items: items }]
-    };
-    warnings.push({ level: "note", msg: "bookWorld 分类已写入 moreKeys.requestFilters（格式二数组，" + items.length + " 个分类），pageSize 固定 20" });
+    var tokens = [];
+    if (uniform) {
+      for (var m4 = 0; m4 < grp.length; m4++) {
+        var tk = segsArr[m4][diffIdx];
+        if (!tk || /[?=&\s]/.test(tk) || tk.indexOf("{{") !== -1) { uniform = false; break; }
+        tokens.push(tk);
+      }
+    }
+
+    if (uniform) {
+      var skelSegs = segsArr[0].slice();
+      skelSegs[diffIdx] = "_TYPE_";
+      var pgExprs = head.sig === "" ? [] : head.sig.split("\u0001");
+      var pIdx = 0;
+      var urlTpl = skelSegs.join("/").replace("_TYPE_", "${_type}")
+          + "/" + head.tail + "{{page}}" + head.post;
+      urlTpl = urlTpl.replace(/\{\{page\}\}/g, function () {
+        pIdx++;
+        return "${" + (pgExprs[pIdx] || "params.pageIndex") + "}";
+      });
+      var filters3 = "_type";
+      for (var m6 = 0; m6 < grp.length; m6++) {
+        filters3 += "\n" + grp[m6].name + "::" + tokens[m6];
+      }
+      pushEntry(null,
+          "@js:\nlet {_type}=params.filters\nlet url=`" + urlTpl + "`;\n\nreturn {url:url}",
+          filters3,
+          "分类页[" + (entries.length === 0 ? "分类" : "分类" + (entries.length + 1)) + "]：" + grp.length + " 个分类共享 URL 模板（_type）");
+      continue;
+    }
+
+    // 非均匀组 → 拼接方案（格式二），tail/post 组内一致
+    var itemsJ = [];
+    for (var m7 = 0; m7 < grp.length; m7++) {
+      itemsJ.push({ title: grp[m7].name, value: grp[m7].base });
+      if (!/^https?:\/\//i.test(grp[m7].raw)) {
+        warnings.push({ level: "note", msg: "分类[" + grp[m7].name + "] URL 为相对地址（" + grp[m7].base + "），将基于站点 host 拼接" });
+      }
+    }
+    var tplJ = "params.filters.order + \"/\"";
+    if (head.tail !== "") tplJ += " + \"" + utils.escStr(head.tail) + "\"";
+    tplJ += " + params.pageIndex";
+    if (head.post !== "") tplJ += " + \"" + utils.escStr(head.post) + "\"";
+    pushEntry(null,
+        "@js:\nlet url = " + tplJ + "\n\nreturn encodeURI(url)",
+        [{ key: "order", items: itemsJ }],
+        "分类页[" + (entries.length === 0 ? "分类" : "分类" + (entries.length + 1)) + "]：" + grp.length + " 个分类共用分页结构（格式二）");
+  }
+
+  // —— 兜底「更多」：无法成组的单行/混合表达式，运行时按 page/key 求值 ——
+  if (leftovers.length) {
+    var itemsR = [];
+    for (var r2 = 0; r2 < leftovers.length; r2++) {
+      var p3 = safeDecode(leftovers[r2].raw);
+      itemsR.push({ title: leftovers[r2].name, value: p3 });
+      if (!/^https?:\/\//i.test(leftovers[r2].raw)) {
+        warnings.push({ level: "note", msg: "分类[" + leftovers[r2].name + "] URL 为相对地址，将基于站点 host 拼接" });
+      }
+    }
+    pushEntry("更多",
+        "@js:\nlet url = String(params.filters.order).replace(/\\{\\{([\\s\\S]*?)\\}\\}/g, function(_, e){\n"
+        + "  try {\n"
+        + "    var f = new Function('page', 'key', 'return (' + e + ')');\n"
+        + "    return String(f(params.pageIndex, params.keyWord));\n"
+        + "  } catch (err) {\n"
+        + "    return _;\n"
+        + "  }\n"
+        + "})\n\nreturn encodeURI(url)",
+        [{ key: "order", items: itemsR }],
+        "分类页[更多]：" + itemsR.length + " 个分类结构特殊，运行时求值（支持算术与三元表达式）");
+  }
+
+  if (!entries.length) {
+    return { module: null, warnings: warnings.concat([{ level: "note", msg: "exploreUrl 未解析出可用分类，跳过 bookWorld" }]) };
   }
   var world2 = {};
-  world2["分类"] = m;
+  entries.forEach(function (en2) { world2[en2.key] = en2.module; });
   return { module: world2, warnings: warnings };
 }
 

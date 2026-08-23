@@ -187,14 +187,13 @@ test("modules: bookWorld 逐行模式（格式二数组 + 分页拼接）", func
   ok(m.requestInfo.indexOf("params.filters.order") !== -1, "requestInfo 应引用 params.filters.order");
   ok(m.requestInfo.indexOf("encodeURI") !== -1, "requestInfo 应 encodeURI");
 });
-test("modules: bookWorld 单入口（运行时求值方案）", function () {
+test("modules: bookWorld 单入口（拼接方案）", function () {
   var ctx = { src: mkSrc({ exploreUrl: "https://x.com/list/{{page}}.html" }), host: "https://x.com", jsonEnabled: false };
   var bw = modules.buildBookWorld(ctx.src, ctx).module;
   eq(Object.keys(bw).length, 1);
   var m = bw["分类"];
-  ok(m.requestInfo.indexOf("new Function") !== -1, "单行应走运行时求值方案");
-  ok(Array.isArray(m.moreKeys.requestFilters), "requestFilters 应为格式二数组");
-  eq(m.moreKeys.requestFilters[0].items[0].value, "https://x.com/list/{{page}}.html");
+  ok(m.requestInfo.indexOf('params.filters.order + "/" + params.pageIndex') !== -1, "单行走拼接方案");
+  ok(m.moreKeys.requestFilters[0].items[0].value === "https://x.com/list", "value 应为去页码后的根路径");
 });
 test("modules: JSONPath 透传降级", function () {
   var ctx = { src: mkSrc(), host: "https://x.com", jsonEnabled: true };
