@@ -2735,7 +2735,66 @@ function convert(source, options) {
   return { output: output, warnings: warnings };
 }
 
-module.exports = { convert: convert };
+/** 输入归一化为书源数组：数组 / {"0":{...}} 阅读导出格式 / 单对象。 */
+function toSourceArray(source) {
+  if (Array.isArray(source)) return source;
+  if (source && typeof source === "object") {
+    if ("0" in source) {
+      var arr = [];
+      var i = 0;
+      while (Object.prototype.hasOwnProperty.call(source, String(i)) && i < 100000) {
+        arr.push(source[String(i)]);
+        i++;
+      }
+      if (arr.length) return arr;
+    }
+    return [source];
+  }
+  return [];
+}
+
+/**
+ * 批量转换（阅读订阅包常为 JSON 数组，可达上千个书源）：
+ * - 每个书源独立 try/catch，单个失败不影响其余
+ * - 重名书源自动追加 "(2)" 后缀
+ * - 警告附加 source 字段（所属书源名），便于批量场景定位
+ * 返回 { output(合并后单对象), warnings, failures:[{index,name?,error}], count, okCount }
+ */
+function convertAll(source, options) {
+  options = options || {};
+  var arr = toSourceArray(source);
+  var out = {};
+  var warnings = [];
+  var failures = [];
+  var okCount = 0;
+  for (var i = 0; i < arr.length; i++) {
+    try {
+      var r = convert(arr[i], options);
+      if (!r.output || !Object.keys(r.output).length) {
+        failures.push({ index: i, error: (r.warnings[0] && r.warnings[0].msg) || "无法识别的书源格式" });
+        continue;
+      }
+      var baseName = Object.keys(r.output)[0];
+      var name = baseName;
+      var n = 2;
+      while (Object.prototype.hasOwnProperty.call(out, name)) {
+        name = baseName + "(" + n + ")";
+        n++;
+      }
+      out[name] = r.output[baseName];
+      okCount++;
+      for (var w = 0; w < r.warnings.length; w++) {
+        var ww = r.warnings[w];
+        warnings.push({ level: ww.level, module: ww.module, msg: ww.msg, source: name });
+      }
+    } catch (e) {
+      failures.push({ index: i, error: String(e && e.message ? e.message : e) });
+    }
+  }
+  return { output: out, warnings: warnings, failures: failures, count: arr.length, okCount: okCount };
+}
+
+module.exports = { convert: convert, convertAll: convertAll };
 
 };
 window.ConverterLib=__req('index');

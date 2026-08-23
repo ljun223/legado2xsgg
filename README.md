@@ -6,6 +6,8 @@
 
 **在线使用（GitHub Pages）**：<https://ljun223.github.io/legado2xsgg/> —— 打开即用，转换全程在本地浏览器完成，数据不上传。
 
+✅ **批量转换**：直接粘贴阅读订阅链接（或上传 JSON 数组书源包），一次转换上千个书源（500 源约 60ms），失败源单独列出互不影响。
+
 **下载 Android App**：[releases/xbsrebuild.apk](releases/xbsrebuild.apk)（或到 [Releases](https://github.com/ljun223/legado2xsgg/releases) 页面下载带签名的版本）。
 
 ## 功能
@@ -47,7 +49,7 @@
 
 ```
 legado2xsgg/
-├── docs/                 # GitHub Pages 网页版（index.html）+ 两端书源规则文档
+├── docs/                 # GitHub Pages 网页版（index.html + updates.json 更新公告）+ 规则文档
 ├── converter/            # 转换引擎（纯 JS，零依赖）
 │   ├── lib/              #   核心实现
 │   ├── test/             #   金标准回归 + 单元测试

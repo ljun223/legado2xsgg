@@ -36,6 +36,18 @@
   footer a { color: #6366F1; text-decoration: none; }
   input[type=file] { display: none; }
   @media (max-width: 600px) { header h1 { font-size: 18px; } .card { padding: 14px; } }
+  /* 更新通知横幅 */
+  .upbar { display: none; position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4F46E5, #7C3AED); color: #fff; padding: 10px 16px; box-shadow: 0 2px 10px rgba(67,56,202,.35); }
+  .upbar.show { display: block; animation: updown .35s ease; }
+  @keyframes updown { from { transform: translateY(-100%); opacity: 0; } to { transform: none; opacity: 1; } }
+  .upbar .uwrap { max-width: 960px; margin: 0 auto; display: flex; align-items: flex-start; gap: 12px; }
+  .upbar .ubody { flex: 1; font-size: 13px; line-height: 1.6; min-width: 0; }
+  .upbar b.ut { font-size: 14px; }
+  .upbar .udate { opacity: .8; font-size: 11px; margin-left: 8px; }
+  .upbar ul { margin: 4px 0 0 18px; padding: 0; }
+  .upbar li { margin: 2px 0; }
+  .upx { background: rgba(255,255,255,.18); border: none; color: #fff; width: 26px; height: 26px; border-radius: 50%; cursor: pointer; font-size: 13px; flex-shrink: 0; line-height: 1; }
+  .upx:hover { background: rgba(255,255,255,.32); }
 </style>
 </head>
 <body>
@@ -49,6 +61,16 @@
     <a href="https://github.com/ljun223/legado2xsgg" target="_blank">GitHub / APK 下载</a>
   </div>
 </header>
+
+<div class="upbar" id="upbar">
+  <div class="uwrap">
+    <div class="ubody">
+      <b class="ut" id="upTitle">更新</b><span class="udate" id="upDate"></span>
+      <ul id="upItems"></ul>
+    </div>
+    <button class="upx" id="upX" title="关闭">×</button>
+  </div>
+</div>
 
 <main>
   <!-- 书源转换 -->
@@ -231,46 +253,124 @@ function clearAll() {
   setStatus($("status"), "");
   ["copyBtn", "dlJsonBtn", "dlXbsBtn"].forEach(function (id) { $(id).disabled = true; });
 }
+var lastFullJson = "";
+var PREVIEW_LIMIT = 400000;
+var WARN_CAP = 300;
 function doConvert() {
   var st = $("status"), wb = $("warnbox");
   var text = $("input").value.trim();
-  if (!text) { setStatus(st, "请先粘贴或选择书源 JSON", "err"); return; }
-  var src;
-  try { src = JSON.parse(text); } catch (e) { setStatus(st, "JSON 解析失败：" + e.message, "err"); return; }
+  if (!text) { setStatus(st, "请先粘贴书源 JSON / 订阅链接，或选择文件", "err"); return; }
   if (!window.ConverterLib || typeof window.ConverterLib.convert !== "function") {
     setStatus(st, "转换引擎加载失败，请刷新页面重试", "err"); return;
   }
+  if (/^https?:\/\/\S+$/i.test(text) && text.length < 2048) {
+    setStatus(st, "⏳ 正在解析订阅链接…", "");
+    fetchSubscription(text).then(function (jsonText) {
+      runConvert(jsonText, st, wb);
+    }, function (err) {
+      setStatus(st, "订阅链接解析失败：" + err, "err");
+    });
+    return;
+  }
+  runConvert(text, st, wb);
+}
+/* 订阅链接抓取：直连 → 公共 CORS 代理链；返回原始 JSON 文本 */
+function fetchSubscription(url) {
+  var attempts = [
+    url,
+    "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
+    "https://corsproxy.io/?url=" + encodeURIComponent(url)
+  ];
+  function tryOne(i) {
+    if (i >= attempts.length) {
+      return Promise.reject("浏览器直连被 CORS 拦截且代理均不可用，请改用「下载后上传文件」方式");
+    }
+    return fetch(attempts[i], { redirect: "follow" }).then(function (resp) {
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      return resp.text();
+    }).then(function (t) {
+      var s2 = t.trim();
+      if (!s2 || (s2.charAt(0) !== "[" && s2.charAt(0) !== "{")) throw new Error("响应不是 JSON");
+      return s2;
+    }).catch(function () {
+      return tryOne(i + 1);
+    });
+  }
+  return tryOne(0);
+}
+function runConvert(jsonText, st, wb) {
+  var src;
+  try { src = JSON.parse(jsonText); } catch (e) { setStatus(st, "JSON 解析失败：" + e.message, "err"); return; }
   var r;
-  try { r = window.ConverterLib.convert(src, { cryptoJsSource: "" }); }
-  catch (e) { setStatus(st, "转换异常：" + e.message, "err"); return; }
-  if (r.error) { setStatus(st, "转换失败：" + r.error, "err"); return; }
-  if (!r.output) { setStatus(st, "无法识别的书源格式", "err"); }
+  try {
+    if (typeof window.ConverterLib.convertAll === "function") {
+      r = window.ConverterLib.convertAll(src, { cryptoJsSource: "" });
+    } else {
+      r = window.ConverterLib.convert(src, { cryptoJsSource: "" });
+      r.failures = []; r.count = 1; r.okCount = r.output ? 1 : 0;
+    }
+  } catch (e) { setStatus(st, "转换异常：" + e.message, "err"); return; }
+  if (!r.output || !Object.keys(r.output).length) {
+    setStatus(st, "转换失败：" + ((r.failures && r.failures[0] && r.failures[0].error) || r.error || "无法识别的书源格式"), "err");
+    return;
+  }
 
-  // 提示渲染（需人工项标红）
+  // 提示渲染（需人工项标红；批量带 [书源名] 前缀；超量截断）
   wb.innerHTML = "";
   var warns = r.warnings || [];
-  if (warns.length) {
+  var fails = r.failures || [];
+  var totalLines = warns.length + fails.length;
+  if (totalLines) {
     var title = document.createElement("div");
-    title.innerHTML = "<b>转换提示（" + warns.length + " 条）</b>";
+    title.innerHTML = "<b>转换提示（" + totalLines + " 条）</b>";
     wb.appendChild(title);
+    var shown = 0;
     warns.forEach(function (w) {
+      if (shown >= WARN_CAP) return;
+      shown++;
       var div = document.createElement("div");
-      var line = "[" + (w.level || "") + "]" + (w.module ? "[" + w.module + "] " : "") + (w.msg || "");
+      var line = "[" + (w.level || "") + "]"
+          + (w.source ? "[" + w.source + "]" : "")
+          + (w.module ? "[" + w.module + "] " : "") + (w.msg || "");
       div.textContent = line;
       if (isManual(w)) div.className = "red";
       wb.appendChild(div);
     });
+    fails.forEach(function (f) {
+      if (shown >= WARN_CAP) return;
+      shown++;
+      var div = document.createElement("div");
+      div.className = "red";
+      div.textContent = "[失败] 第 " + ((f.index || 0) + 1) + " 个书源：" + (f.error || "未知错误");
+      wb.appendChild(div);
+    });
+    if (totalLines > shown) {
+      var more = document.createElement("div");
+      more.textContent = "…其余 " + (totalLines - shown) + " 条已省略";
+      wb.appendChild(more);
+    }
     wb.style.display = "block";
   } else {
     wb.style.display = "none";
   }
 
   var pretty = JSON.stringify(r.output, null, 2);
-  $("output").value = pretty;
-  var keys = r.output ? Object.keys(r.output) : [];
+  lastFullJson = pretty;
+  $("output").value = pretty.length > PREVIEW_LIMIT
+      ? pretty.slice(0, PREVIEW_LIMIT) + "\n\n…（预览已截断，完整结果共 " + pretty.length + " 字符，请用下载按钮获取）"
+      : pretty;
+  var keys = Object.keys(r.output);
   lastOutputName = keys[0] ? keys[0].replace(/[\\/:*?"<>|\x00-\x1f]/g, "_") : "booksource";
+  if (keys.length > 1) lastOutputName += "_等" + keys.length + "个";
   var manualCount = warns.filter(isManual).length;
-  setStatus(st, "转换完成：" + keys.join("、") + "（提示 " + warns.length + " 条" + (manualCount ? "，其中需人工 " + manualCount + " 条" : "") + "）", "ok");
+  var statText;
+  if (keys.length > 1 || fails.length) {
+    statText = "共 " + r.count + " 个书源：成功 " + r.okCount + "，失败 " + fails.length
+        + "（提示 " + warns.length + " 条" + (manualCount ? "，需人工 " + manualCount : "") + "）";
+  } else {
+    statText = "转换完成：" + keys.join("、") + "（提示 " + warns.length + " 条" + (manualCount ? "，其中需人工 " + manualCount + " 条" : "") + "）";
+  }
+  setStatus(st, statText, fails.length ? "" : "ok");
   ["copyBtn", "dlJsonBtn", "dlXbsBtn"].forEach(function (id) { $(id).disabled = false; });
 }
 function copyOut() {
@@ -295,12 +395,12 @@ function downloadBlob(bytes, name, mime) {
   setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 800);
 }
 function downloadJson() {
-  var t = $("output").value;
+  var t = lastFullJson || $("output").value;
   if (!t) return;
   downloadBlob(t, lastOutputName + ".json", "application/json");
 }
 function downloadXbs() {
-  var t = $("output").value;
+  var t = lastFullJson || $("output").value;
   if (!t) return;
   try {
     var xbs = json2xbs(t);
@@ -349,6 +449,33 @@ $("xbsFile").addEventListener("change", function (ev) {
 function clearXbs() {
   setStatus($("xbsStatus"), "");
 }
+
+/* ---------------- 更新通知 ---------------- */
+(function loadUpdates() {
+  var KEY = "l2x_seen_ver";
+  fetch("updates.json?ts=" + Date.now()).then(function (r) { return r.json(); }).then(function (list) {
+    if (!Array.isArray(list) || !list.length) return;
+    list.sort(function (a, b) { return String(b.version).localeCompare(String(a.version)); });
+    var latest = list[0];
+    var seen = null;
+    try { seen = localStorage.getItem(KEY); } catch (e) {}
+    if (seen === latest.version) return;
+    $("upTitle").textContent = "🚀 更新到 v" + latest.version + (latest.title ? " · " + latest.title : "");
+    $("upDate").textContent = latest.date || "";
+    var ul = $("upItems");
+    ul.innerHTML = "";
+    (latest.items || []).slice(0, 6).forEach(function (it) {
+      var li = document.createElement("li");
+      li.textContent = it;
+      ul.appendChild(li);
+    });
+    $("upbar").className = "upbar show";
+    $("upX").onclick = function () {
+      try { localStorage.setItem(KEY, latest.version); } catch (e) {}
+      $("upbar").className = "upbar";
+    };
+  }).catch(function () { /* updates.json 不存在或离线：静默 */ });
+})();
 </script>
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-30M6LZ174J"></script>
 <script>

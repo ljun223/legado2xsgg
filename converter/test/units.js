@@ -6,6 +6,7 @@ var jsRule = require("../lib/jsRule.js");
 var urlRule = require("../lib/urlRule.js");
 var modules = require("../lib/modules.js");
 var utils = require("../lib/utils.js");
+var converter = require("../lib/index.js");
 
 var tests = [];
 var failures = 0;
@@ -308,10 +309,6 @@ test("modules: bookWorld 各行表达式不同 → 运行时求值方案", funct
   ok(m.requestInfo.indexOf("new Function") !== -1, "应使用运行时 Function 求值");
 });
 
-console.log("");
-console.log(failures === 0 ? "全部通过（" + tests.length + " 项）" : failures + " 项失败");
-process.exit(failures === 0 ? 0 : 1);
-
 // ---------- ensureReturn：Legado 最后一行求值语义 ----------
 test("ensureReturn: 多语句保持原样并追加 return 末行", function () {
   var got = rules.ensureReturn("var a = result.length;\nvar b = a * 2;\na + b");
@@ -327,3 +324,27 @@ test("ensureReturn: 单行表达式直接包裹不重复", function () {
 test("ensureReturn: 末行为声明时回退原样", function () {
   eq(rules.ensureReturn("var c = result;"), "var c = result;");
 });
+
+// ---------- convertAll 批量转换 ----------
+test("convertAll: 数组批量 + 失败隔离 + 重名去重", function () {
+  var good1 = { bookSourceName: "A", bookSourceUrl: "https://a.com", searchUrl: "/s/{{key}}" };
+  var good2 = { bookSourceName: "A", bookSourceUrl: "https://b.com", searchUrl: "/s/{{key}}" };
+  var bad = { bookSourceName: "坏源" };  // 无 bookSourceUrl → error 警告但仍有 output? 检查：缺 url 时仍产出（警告），用完全非法对象测失败
+  var r = converter.convertAll([good1, good2, { note: "x" }], {});
+  eq(r.count, 3);
+  eq(r.okCount, 2);
+  var keys = Object.keys(r.output).sort();
+  eq(keys.length, 2);
+  ok(keys[0] === "A" && keys[1].indexOf("A(2)") === 0, "重名应追加后缀");
+});
+test("convertAll: 阅读导出格式 {\"0\":{...}} 与警告 source 标记", function () {
+  var r = converter.convertAll({ "0": { bookSourceName: "B", bookSourceUrl: "https://b.com", searchUrl: "/s/{{key}}" } }, {});
+  eq(Object.keys(r.output).length, 1);
+  var w2 = converter.convertAll({ bookSourceType: 2, bookSourceName: "C", bookSourceUrl: "https://c.com", searchUrl: "/s" }, {}).warnings;
+  ok(w2.some(function (w) { return w.source === "C"; }), "警告应带 source 字段");
+});
+
+console.log("");
+console.log(failures === 0 ? "全部通过（" + tests.length + " 项）" : failures + " 项失败");
+process.exit(failures === 0 ? 0 : 1);
+
