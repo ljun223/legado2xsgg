@@ -87,7 +87,7 @@
       <button class="ghost" onclick="clearAll()">清空</button>
     </div>
     <div style="margin-top:10px">
-      <textarea id="input" placeholder='在此粘贴开源阅读书源 JSON…&#10;支持：[ {...}, {...} ] 数组 / 单个书源对象 / {"0":{...}} 导出格式'></textarea>
+      <textarea id="input" placeholder='在此粘贴书源 JSON 或订阅链接…&#10;支持：订阅 URL / [ {...}, {...} ] 数组 / 单个书源对象 / {"0":{...}} 导出格式'></textarea>
     </div>
     <div class="row">
       <button class="primary" id="convertBtn" onclick="doConvert()">开始转换</button>
@@ -274,29 +274,57 @@ function doConvert() {
   }
   runConvert(text, st, wb);
 }
-/* 订阅链接抓取：直连 → 公共 CORS 代理链；返回原始 JSON 文本 */
+/* 订阅链接抓取：直连 → 多公共代理链；任一通道返回的文本中提取出书源 JSON 即成功。
+   站点在 Cloudflare 后导致代理被拒时，会提示改用「下载后上传文件」。 */
+var SUB_PROXY_BUILDERS = [
+  function (u) { return u; },
+  function (u) { return "https://api.allorigins.win/raw?url=" + encodeURIComponent(u); },
+  function (u) { return "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u); },
+  function (u) { return "https://corsproxy.io/?url=" + encodeURIComponent(u); },
+  function (u) { return "https://r.jina.ai/" + u; }
+];
+/* 从任意响应文本中定位 JSON 片段（容忍 jina 等包装、HTML 夹带）。 */
+function extractJsonText(t) {
+  var s2 = String(t == null ? "" : t).trim();
+  if (!s2) return null;
+  if (s2.charAt(0) === "[" || s2.charAt(0) === "{") return s2;
+  var fi = s2.search(/[\[{]/);
+  if (fi === -1) return null;
+  var li = Math.max(s2.lastIndexOf("]"), s2.lastIndexOf("}"));
+  if (li <= fi) return null;
+  var cand = s2.slice(fi, li + 1);
+  try { JSON.parse(cand); return cand; } catch (e) { return null; }
+}
 function fetchSubscription(url) {
-  var attempts = [
-    url,
-    "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
-    "https://corsproxy.io/?url=" + encodeURIComponent(url)
-  ];
-  function tryOne(i) {
-    if (i >= attempts.length) {
-      return Promise.reject("浏览器直连被 CORS 拦截且代理均不可用，请改用「下载后上传文件」方式");
+  var st = $("status");
+  var chain = [];
+  for (var i = 0; i < SUB_PROXY_BUILDERS.length; i++) chain.push(SUB_PROXY_BUILDERS[i](url));
+  var idx = 0;
+  function attempt() {
+    if (idx >= chain.length) {
+      return Promise.reject("直连与公共代理均失败（该站点可能开启了防爬拦截，代理 IP 被拒）。"
+          + "请在浏览器中打开链接下载 .json 文件后，用「选择 JSON 文件」导入——转换能力完全一致");
     }
-    return fetch(attempts[i], { redirect: "follow" }).then(function (resp) {
+    var label = idx === 0 ? "直连" : "代理 " + idx;
+    setStatus(st, "⏳ 正在解析订阅链接…（" + label + "）", "");
+    var target = chain[idx++];
+    var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 25000) : null;
+    return fetch(target, { redirect: "follow" }).then(function (resp) {
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       return resp.text();
     }).then(function (t) {
-      var s2 = t.trim();
-      if (!s2 || (s2.charAt(0) !== "[" && s2.charAt(0) !== "{")) throw new Error("响应不是 JSON");
-      return s2;
-    }).catch(function () {
-      return tryOne(i + 1);
+      if (timer) clearTimeout(timer);
+      var j = extractJsonText(t);
+      if (!j) throw new Error("响应中未找到书源 JSON");
+      return j;
+    }).catch(function (err) {
+      if (timer) clearTimeout(timer);
+      setStatus(st, "⏳ " + label + " 失败（" + (err && err.message ? err.message : err) + "），尝试下一通道…", "");
+      return attempt();
     });
   }
-  return tryOne(0);
+  return attempt();
 }
 function runConvert(jsonText, st, wb) {
   var src;
