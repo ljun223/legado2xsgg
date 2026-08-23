@@ -46,8 +46,9 @@
   .upbar .udate { opacity: .8; font-size: 11px; margin-left: 8px; }
   .upbar ul { margin: 4px 0 0 18px; padding: 0; }
   .upbar li { margin: 2px 0; }
-  .upx { background: rgba(255,255,255,.18); border: none; color: #fff; width: 26px; height: 26px; border-radius: 50%; cursor: pointer; font-size: 13px; flex-shrink: 0; line-height: 1; }
-  .upx:hover { background: rgba(255,255,255,.32); }
+  .upx { background: rgba(255, 255, 255, .15); border: none; color: #fff; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0; transition: all .2s ease; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+.upx:hover { background: rgba(255, 255, 255, .30); transform: scale(1.08); }
+.upx:active { transform: scale(.92); }
 </style>
 </head>
 <body>
@@ -77,7 +78,7 @@
   <div class="card">
     <h2>开源阅读书源一键转换</h2>
     <div class="desc">
-      粘贴或上传「开源阅读」书源 JSON（支持数组、单对象、{"0":{...}} 导出格式），转换为香色闺阁格式。
+      粘贴或上传「开源阅读」书源 JSON（支持订阅链接、数组、单对象、{"0":{...}} 导出格式），转换为香色闺阁格式。
       转换完全在本地浏览器完成；<span style="color:#DC2626">红色提示</span>为需人工核对项。
     </div>
     <div class="row">
@@ -87,7 +88,7 @@
       <button class="ghost" onclick="clearAll()">清空</button>
     </div>
     <div style="margin-top:10px">
-      <textarea id="input" placeholder='在此粘贴开源阅读书源 JSON…&#10;支持：[ {...}, {...} ] 数组 / 单个书源对象 / {"0":{...}} 导出格式'></textarea>
+      <textarea id="input" placeholder='在此粘贴开源阅读书源 JSON…&#10;支持：直接填写阅读订阅链接 / [ {...}, {...} ] 数组 / 单个书源对象 / {"0":{...}} 导出格式'></textarea>
     </div>
     <div class="row">
       <button class="primary" id="convertBtn" onclick="doConvert()">开始转换</button>
