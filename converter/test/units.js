@@ -378,6 +378,24 @@ test("CSS: 子代轴与 Default 后代轴区分", function () {
   ok(d2.indexOf("//a") !== -1, "Default 应为后代 //a");
 });
 
+test("index: weight 缺省 9999 / 显式值保留", function () {
+  var r1 = converter.convert({ bookSourceName: "W", bookSourceUrl: "https://w.com", searchUrl: "/s" }, {});
+  eq(r1.output["W"].weight, "9999");
+  var r2 = converter.convert({ bookSourceName: "W", bookSourceUrl: "https://w.com", searchUrl: "/s", weight: 5 }, {});
+  eq(r2.output["W"].weight, "5");
+});
+test("modules: replaceRegex 净化映射", function () {
+  var ctx = { src: mkSrc({ ruleContent: { content: "id.ct@text", replaceRegex: "##广告|推广" } }), host: "https://x.com", jsonEnabled: false };
+  var cc = modules.buildChapterContent(ctx.src, ctx);
+  ok(cc.module.content.indexOf("||@js:\nreturn result.replace(/广告|推广/gi, \"\");") !== -1, "应追加净化后处理");
+});
+test("urlRule: webView GET 与 forbidCookie", function () {
+  var r1 = urlRule.buildRequestInfo('/x,{"webView":true}', { src: { bookSourceUrl: "https://x.com" } }, "search");
+  ok(r1.requestInfo.indexOf('webView: ""') !== -1, "webView 应映射");
+  var r2 = urlRule.buildRequestInfo("/x", { src: { bookSourceUrl: "https://x.com", enabledCookieJar: false } }, "search");
+  ok(r2.requestInfo.indexOf("forbidCookie: true") !== -1, "enabledCookieJar=false 应注入 forbidCookie");
+});
+
 console.log("");
 console.log(failures === 0 ? "全部通过（" + tests.length + " 项）" : failures + " 项失败");
 process.exit(failures === 0 ? 0 : 1);

@@ -1545,6 +1545,9 @@ function buildRequestInfo(urlRule, ctx, role) {
     if (e !== "key" && e !== "page") { simple = false; break; }
   }
   if (optMaps.length) simple = false;
+  // 需要注入 forbidCookie 时，纯占位符形态放不下 → 强制走 @js 对象
+  var forbidCookiePre = !!(ctx.src && ctx.src.enabledCookieJar === false);
+  if (forbidCookiePre) simple = false;
 
   // 选项中的可动作级字段
   var actionExtra = {};
@@ -1559,6 +1562,11 @@ function buildRequestInfo(urlRule, ctx, role) {
 
   var needsCrypto = false;
   var jsLines = [];
+  // 阅读源关闭了 CookieJar → 香色闺阁各请求注入 forbidCookie:true
+  var forbidCookie = !!(ctx.src && ctx.src.enabledCookieJar === false);
+  if (forbidCookie) {
+    warnings.push({ level: "note", msg: "enabledCookieJar=false → 请求已写入 forbidCookie: true（不携带 Cookie）" });
+  }
 
   if (options && options.method && String(options.method).toUpperCase() === "POST" && options.body) {
     // POST 情形 → @js: 脚本
@@ -1575,6 +1583,7 @@ function buildRequestInfo(urlRule, ctx, role) {
       jsLines.push("let httpHeaders = " + hdr + ";");
       ret += ", httpHeaders: httpHeaders";
     }
+    if (forbidCookie) ret += ", forbidCookie: true";
     if (options.webView) ret += ', webView: ""';
     if (options.retry) warnings.push({ level: "note", msg: "retry=" + options.retry + " 已忽略" });
     jsLines.push("return " + ret + "};");
@@ -1584,6 +1593,7 @@ function buildRequestInfo(urlRule, ctx, role) {
     if (tplLit2.needsCrypto) needsCrypto = true;
     jsLines.push("let url = `" + tplLit2.literal + "`;");
     var ret2 = "{url: url";
+    if (forbidCookie) ret2 += ", forbidCookie: true";
     if (options) {
       if (options.method && String(options.method).toUpperCase() === "POST") {
         warnings.push({ level: "degraded", msg: "POST 但无 body，已按 GET 处理" });
@@ -2508,7 +2518,36 @@ function buildChapterContent(src, ctx) {
   ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
+
+  // replaceRegex（##正则##替换 净化）→ content 尾部 ||@js: 后处理
+  var rrRaw = src.ruleContent.replaceRegex;
+  if (rrRaw !== undefined && rrRaw !== null && String(rrRaw).trim() !== "") {
+    var prr = parsePurifyRule(String(rrRaw).trim());
+    if (prr && typeof m.content === "string" && m.content !== "") {
+      var seg = ".replace(/" + utils.escRegex(prr.regex) + "/gi, \"" + utils.escStr(prr.repl) + "\")";
+      if (m.content.indexOf("||@js:\n") !== -1) {
+        // 已有 @js 块：把净化链并入其 return 表达式末尾
+        var lastSemi = m.content.lastIndexOf(";");
+        m.content = m.content.slice(0, lastSemi) + seg + m.content.slice(lastSemi);
+      } else {
+        m.content += "||@js:\nreturn result" + seg + ";";
+      }
+      warnings.push({ level: "note", msg: "已映射 replaceRegex 净化规则（/" + prr.regex.slice(0, 30) + "/gi）到 content 后处理" });
+    } else if (!prr) {
+      warnings.push({ level: "degraded", msg: "replaceRegex 仅支持 ##正则##替换 形式，当前值未映射，需人工处理" });
+    }
+  }
   return { module: m, warnings: warnings };
+}
+
+/** 解析阅读净化规则：##正则##替换（替换可省略）。 */
+function parsePurifyRule(v) {
+  if (v.charAt(0) !== "#" || v.charAt(1) !== "#") return null;
+  var body = v.slice(2);
+  if (body === "") return null;
+  var i2 = body.indexOf("##");
+  if (i2 === -1) return { regex: body, repl: "" };
+  return { regex: body.slice(0, i2), repl: body.slice(i2 + 2) };
 }
 
 // 解码 percent-encoding（失败时返回原文）
@@ -2977,7 +3016,7 @@ function convert(source, options) {
     sourceName: src.bookSourceName || "未命名书源",
     sourceUrl: String(src.bookSourceUrl || "").replace(/\/+$/, ""),
     sourceType: sourceType,
-    weight: String(src.weight === undefined ? 0 : src.weight),
+    weight: String(src.weight === undefined || src.weight === null || src.weight === "" ? 9999 : src.weight),
     enable: src.enabled === false ? "0" : "1",
     miniAppVersion: "2.53.2",
     lastModifyTime: String(now),

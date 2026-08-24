@@ -22,6 +22,9 @@
 | ruleToc | chapterList | |
 | ruleContent | chapterContent | |
 | exploreUrl + ruleExplore | bookWorld.分类 | 见分类章节 |
+| ruleContent.replaceRegex（##正则##替换） | content 尾部 `\|\|@js:` 净化 | `/正则/gi` 全局替换；已有后处理则并入其 return 链 |
+| enabledCookieJar=false | 各请求注入 `forbidCookie: true` | 不携带 Cookie |
+| weight 未填时默认 9999 | weight | 显式值保留 |
 | header（JSON 字符串） | httpHeaders | 顶层对象；UA/Referer/Cookie 等站点必需头 |
 | bookUrlPattern / loginUrl / canReName / bookInfoInit / isVip / webJs / sourceRegex | （无对应） | 忽略并在说明中列出 |
 

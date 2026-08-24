@@ -82,7 +82,7 @@ function convert(source, options) {
     sourceName: src.bookSourceName || "未命名书源",
     sourceUrl: String(src.bookSourceUrl || "").replace(/\/+$/, ""),
     sourceType: sourceType,
-    weight: String(src.weight === undefined ? 0 : src.weight),
+    weight: String(src.weight === undefined || src.weight === null || src.weight === "" ? 9999 : src.weight),
     enable: src.enabled === false ? "0" : "1",
     miniAppVersion: "2.53.2",
     lastModifyTime: String(now),

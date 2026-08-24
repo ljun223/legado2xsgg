@@ -182,7 +182,36 @@ function buildChapterContent(src, ctx) {
   ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
+
+  // replaceRegex（##正则##替换 净化）→ content 尾部 ||@js: 后处理
+  var rrRaw = src.ruleContent.replaceRegex;
+  if (rrRaw !== undefined && rrRaw !== null && String(rrRaw).trim() !== "") {
+    var prr = parsePurifyRule(String(rrRaw).trim());
+    if (prr && typeof m.content === "string" && m.content !== "") {
+      var seg = ".replace(/" + utils.escRegex(prr.regex) + "/gi, \"" + utils.escStr(prr.repl) + "\")";
+      if (m.content.indexOf("||@js:\n") !== -1) {
+        // 已有 @js 块：把净化链并入其 return 表达式末尾
+        var lastSemi = m.content.lastIndexOf(";");
+        m.content = m.content.slice(0, lastSemi) + seg + m.content.slice(lastSemi);
+      } else {
+        m.content += "||@js:\nreturn result" + seg + ";";
+      }
+      warnings.push({ level: "note", msg: "已映射 replaceRegex 净化规则（/" + prr.regex.slice(0, 30) + "/gi）到 content 后处理" });
+    } else if (!prr) {
+      warnings.push({ level: "degraded", msg: "replaceRegex 仅支持 ##正则##替换 形式，当前值未映射，需人工处理" });
+    }
+  }
   return { module: m, warnings: warnings };
+}
+
+/** 解析阅读净化规则：##正则##替换（替换可省略）。 */
+function parsePurifyRule(v) {
+  if (v.charAt(0) !== "#" || v.charAt(1) !== "#") return null;
+  var body = v.slice(2);
+  if (body === "") return null;
+  var i2 = body.indexOf("##");
+  if (i2 === -1) return { regex: body, repl: "" };
+  return { regex: body.slice(0, i2), repl: body.slice(i2 + 2) };
 }
 
 // 解码 percent-encoding（失败时返回原文）

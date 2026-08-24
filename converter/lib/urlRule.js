@@ -263,6 +263,9 @@ function buildRequestInfo(urlRule, ctx, role) {
     if (e !== "key" && e !== "page") { simple = false; break; }
   }
   if (optMaps.length) simple = false;
+  // 需要注入 forbidCookie 时，纯占位符形态放不下 → 强制走 @js 对象
+  var forbidCookiePre = !!(ctx.src && ctx.src.enabledCookieJar === false);
+  if (forbidCookiePre) simple = false;
 
   // 选项中的可动作级字段
   var actionExtra = {};
@@ -277,6 +280,11 @@ function buildRequestInfo(urlRule, ctx, role) {
 
   var needsCrypto = false;
   var jsLines = [];
+  // 阅读源关闭了 CookieJar → 香色闺阁各请求注入 forbidCookie:true
+  var forbidCookie = !!(ctx.src && ctx.src.enabledCookieJar === false);
+  if (forbidCookie) {
+    warnings.push({ level: "note", msg: "enabledCookieJar=false → 请求已写入 forbidCookie: true（不携带 Cookie）" });
+  }
 
   if (options && options.method && String(options.method).toUpperCase() === "POST" && options.body) {
     // POST 情形 → @js: 脚本
@@ -293,6 +301,7 @@ function buildRequestInfo(urlRule, ctx, role) {
       jsLines.push("let httpHeaders = " + hdr + ";");
       ret += ", httpHeaders: httpHeaders";
     }
+    if (forbidCookie) ret += ", forbidCookie: true";
     if (options.webView) ret += ', webView: ""';
     if (options.retry) warnings.push({ level: "note", msg: "retry=" + options.retry + " 已忽略" });
     jsLines.push("return " + ret + "};");
@@ -302,6 +311,7 @@ function buildRequestInfo(urlRule, ctx, role) {
     if (tplLit2.needsCrypto) needsCrypto = true;
     jsLines.push("let url = `" + tplLit2.literal + "`;");
     var ret2 = "{url: url";
+    if (forbidCookie) ret2 += ", forbidCookie: true";
     if (options) {
       if (options.method && String(options.method).toUpperCase() === "POST") {
         warnings.push({ level: "degraded", msg: "POST 但无 body，已按 GET 处理" });
