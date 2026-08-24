@@ -1783,10 +1783,13 @@ function extractTrailingJsTag(rule) {
 }
 
 // 净化 → JS replace 表达式
-function cleanupToJs(cleanup) {
+// ctx.field === "content"（正文）时强制全局正则：正文片段会多次出现，需全部净化；
+// 标题/分类等字段文本精确，纯文本保持首次替换即可（###OnlyOne 始终单次）。
+function cleanupToJs(cleanup, ctx) {
   var regex = cleanup.regex;
   var repl = cleanup.repl === undefined ? "" : cleanup.repl;
-  if (!cleanup.onlyOne && isLiteralText(regex)) {
+  var isContent = !!(ctx && ctx.field === "content");
+  if (!cleanup.onlyOne && isLiteralText(regex) && !isContent) {
     // 纯文本：用字符串 replace（首次匹配），与人工书写习惯一致
     return 'result.replace("' + escStr(regex) + '","' + escStr(repl) + '")';
   }
@@ -2198,7 +2201,7 @@ function convertOne(rule, ctx) {
   if (jsResult !== null && cleanup !== null) {
     // js + 净化：先执行 js，再对结果 replace
     jsLines.push("var _r = (function(){" + jsResult.code + "})();");
-    jsLines.push("return " + cleanupToJs(cleanup).replace("result", "_r") + ";");
+    jsLines.push("return " + cleanupToJs(cleanup, ctx).replace("result", "_r") + ";");
   } else if (jsResult !== null) {
     var ensured = ensureReturn(jsResult.code);
     if (!/\breturn\b/.test(ensured)) {
@@ -2206,7 +2209,7 @@ function convertOne(rule, ctx) {
     }
     jsLines.push(ensured);
   } else if (cleanup !== null) {
-    jsLines.push("return " + cleanupToJs(cleanup) + ";");
+    jsLines.push("return " + cleanupToJs(cleanup, ctx) + ";");
   }
 
   var value = xpath;
@@ -2401,7 +2404,11 @@ function pickFields(src, mapping, ctx) {
       }
       continue;
     }
-    var r = rules.convertRule(String(raw), ctx);
+    // 按字段名注入 ctx.field：正文/标题等净化与 text 取值语义依赖它
+    var fctx = {};
+    for (var fk in ctx) fctx[fk] = ctx[fk];
+    fctx.field = legadoKey;
+    var r = rules.convertRule(String(raw), fctx);
     if (r.value === "") continue;
     out[xsggKey] = r.value;
     warnings = warnings.concat(r.warnings);

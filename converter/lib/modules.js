@@ -65,7 +65,11 @@ function pickFields(src, mapping, ctx) {
       }
       continue;
     }
-    var r = rules.convertRule(String(raw), ctx);
+    // 按字段名注入 ctx.field：正文/标题等净化与 text 取值语义依赖它
+    var fctx = {};
+    for (var fk in ctx) fctx[fk] = ctx[fk];
+    fctx.field = legadoKey;
+    var r = rules.convertRule(String(raw), fctx);
     if (r.value === "") continue;
     out[xsggKey] = r.value;
     warnings = warnings.concat(r.warnings);
