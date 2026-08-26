@@ -21,7 +21,7 @@ var BASE = { src: {}, host: "https://x.com", jsonEnabled: false };
 // ---------- defaultRule ----------
 test("Default: class. 类型与位置", function () {
   eq(defaultRule.convertDefault("class.odd.0@tag.a.0@text", BASE).xpath,
-     '((//*[contains(@class,"odd")])[1]//a)[1]/text()');
+     '((//*[contains(@class,"odd")])[1]//a)[1]//text()');
 });
 test("Default: #id 后代链", function () {
   eq(defaultRule.convertDefault("#fmimg img@data-original", BASE).xpath,
@@ -29,7 +29,7 @@ test("Default: #id 后代链", function () {
 });
 test("Default: :contains 中文", function () {
   eq(defaultRule.convertDefault("#info p:contains(作者)@text", BASE).xpath,
-     '//*[contains(@id,"info")]//p[contains(.,"作者")]/text()');
+     '//*[contains(@id,"info")]//p[contains(.,"作者")]//text()');
 });
 test("Default: CSS 式裸选择器 + 属性", function () {
   eq(defaultRule.convertDefault("meta[property=og:image]@content", BASE).xpath,
@@ -37,9 +37,9 @@ test("Default: CSS 式裸选择器 + 属性", function () {
 });
 test("Default: 排除 ! 与位置", function () {
   eq(defaultRule.convertDefault("class.x.0!1@text", BASE).xpath,
-     '(//*[contains(@class,"x")])[1 and not(2)]/text()');
+     '(//*[contains(@class,"x")])[1 and not(2)]//text()');
   eq(defaultRule.convertDefault("li.3@text", BASE).xpath,
-     '(//li)[4]/text()');
+     '(//li)[4]//text()');
 });
 test("Default: html 内容操作", function () {
   var r = defaultRule.convertDefault("id.booktxt@html", { field: "content" });
@@ -49,7 +49,7 @@ test("Default: html 内容操作", function () {
 // ---------- cssRule ----------
 test("CSS: 后代/类/id", function () {
   eq(cssRule.convertCss("@css:.item a@href", BASE).xpath, '//*[contains(@class,"item")]//a/@href');
-  eq(cssRule.convertCss("@css:#list li:first@text", BASE).xpath, '(//*[@id="list"]//li)[1]/text()');
+  eq(cssRule.convertCss("@css:#list li:first@text", BASE).xpath, '(//*[@id="list"]//li)[1]//text()');
 });
 
 // ---------- rules ----------
@@ -59,7 +59,7 @@ test("规则: || 备选拆分", function () {
 });
 test("规则: ## 净化 → @js replace（纯文本用字符串）", function () {
   var r = rules.convertRule(".sort@text##类别：", BASE);
-  eq(r.value, '//*[contains(@class,"sort")]/text()||@js:\nreturn result.replace("类别：","");');
+  eq(r.value, '//*[contains(@class,"sort")]//text()||@js:\nreturn result.replace("类别：","");');
 });
 test("规则: ### 正则净化 OnlyOne（无 g）", function () {
   var r = rules.convertRule("em@text###\\d+", BASE);
@@ -168,8 +168,8 @@ test("modules: bookWorld _type 模式", function () {
   eq(bw[key].requestInfo, "@js:\nlet {_type}=params.filters\nlet url=`/${_type}/${params.pageIndex}.html`;\n\nreturn {url:url}");
   eq(bw[key].moreKeys.requestFilters, "_type\n玄幻::xh\n武侠::wx");
   eq(bw[key].bookName, "(//a)[1]/@title");
-  eq(bw[key].wordCount, "(//em)[1]/text()");
-  eq(bw[key].lastChapterTitle, "(//em)[2]/text()");
+  eq(bw[key].wordCount, "(//em)[1]//text()");
+  eq(bw[key].lastChapterTitle, "(//em)[2]//text()");
 });
 test("modules: bookWorld 逐行模式（格式二数组 + 分页拼接）", function () {
   var ctx = { src: mkSrc({ exploreUrl: "玄幻::/xh/{{page}}.html\n武侠::https://y.com/wx/{{page}}.html" }), host: "https://x.com", jsonEnabled: false };

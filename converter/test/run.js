@@ -16,6 +16,9 @@ function load(name) {
 // 已知差异：路径 → 说明
 var WHITELIST = {
   ".sourceType": "mine 新增字段（bookSourceType 映射 text/audio/comic/video），golden 无",
+  ".bookDetail.desc": "mine @text → //text()（含后代，防内嵌标签漏字）",
+  ".chapterList.title": "同上语义升级",
+  ".bookWorld.分类.desc": "同上语义升级",
   ".sourceUrl": "golden 去掉尾部 /，mine 保留后由转换器统一去掉（应一致）",
   ".weight": "golden 人工改为 9999，mine 沿用 Legado 权重",
   ".lastModifyTime": "生成时间戳，必然不同",

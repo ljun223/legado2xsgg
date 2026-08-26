@@ -262,9 +262,11 @@ function mapContentOp(op, field) {
   var xpath;
   switch (op) {
     case "text":
-      xpath = field === "content" ? "//text()" : "/text()";
+      // 后代文本：标题/简介常含 <em>/<span> 内嵌标签，直接子文本会漏字
+      xpath = "//text()";
       break;
     case "ownText":
+      // 仅元素自身直接文本（排除后代），语义不同保持 /text()
       xpath = "/text()";
       break;
     case "textNodes":
