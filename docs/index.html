@@ -302,6 +302,19 @@ function doConvert() {
   }
   runConvert(text, st, wb);
 }
+/* 明文 JSON 直返；否则按 XBS（XXTEA）尝试解密（复用页面内 xbs2json），失败回退原文。 */
+function decodeMaybeXbs(bytes) {
+  var head = "";
+  for (var i = 0; i < Math.min(16, bytes.length); i++) head += String.fromCharCode(bytes[i]);
+  var h = head.replace(/\s+/g, "");
+  if (h.charAt(0) === "[" || h.charAt(0) === "{") {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+  try { return xbs2json(bytes); } catch (e) {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+
 /* 订阅链接抓取：直连 → 多公共代理链；任一通道返回的文本中提取出书源 JSON 即成功。
    站点在 Cloudflare 后导致代理被拒时，会提示改用「下载后上传文件」。 */
 var SUB_PROXY_BUILDERS = [
@@ -340,11 +353,12 @@ function fetchSubscription(url) {
     var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 25000) : null;
     return fetch(target, { redirect: "follow" }).then(function (resp) {
       if (!resp.ok) throw new Error("HTTP " + resp.status);
-      return resp.text();
-    }).then(function (t) {
+      return resp.arrayBuffer();
+    }).then(function (buf) {
       if (timer) clearTimeout(timer);
+      var t = decodeMaybeXbs(new Uint8Array(buf));
       var j = extractJsonText(t);
-      if (!j) throw new Error("响应中未找到书源 JSON");
+      if (!j) throw new Error("响应不是书源 JSON/XBS");
       return j;
     }).catch(function (err) {
       if (timer) clearTimeout(timer);
@@ -469,13 +483,22 @@ function downloadXbs() {
 $("legadoFile").addEventListener("change", function (ev) {
   var f = ev.target.files && ev.target.files[0];
   if (!f) return;
+  var isXbs = /\.xbs$/i.test(f.name);
   var rd = new FileReader();
   rd.onload = function () {
-    $("input").value = String(rd.result);
-    setStatus($("status"), "已载入 " + f.name + "（" + rd.result.length + " 字符），点「开始转换」", "");
+    var text;
+    if (isXbs) {
+      try { text = xbs2json(new Uint8Array(rd.result)); }
+      catch (e) { setStatus($("status"), "XBS 解密失败：" + e.message, "err"); return; }
+      $("input").value = text;
+    } else {
+      text = String(rd.result);
+      $("input").value = text;
+    }
+    setStatus($("status"), "已载入 " + f.name + "（" + text.length + " 字符），点「开始转换」", "");
     doConvert();
   };
-  rd.readAsText(f, "utf-8");
+  if (isXbs) rd.readAsArrayBuffer(f); else rd.readAsText(f, "utf-8");
   ev.target.value = "";
 });
 $("xbsFile").addEventListener("change", function (ev) {
@@ -588,8 +611,11 @@ $("chkFile").addEventListener("change", function(ev){
   var f = ev.target.files && ev.target.files[0];
   if (!f) return;
   var rd = new FileReader();
-  rd.onload = function(){ $("chkInput").value = String(rd.result); chkStart(); };
-  rd.readAsText(f, "utf-8");
+  rd.onload = function(){
+    try { $("chkInput").value = decodeMaybeXbs(new Uint8Array(rd.result)); } catch (e) {}
+    chkStart();
+  };
+  rd.readAsArrayBuffer(f);
   ev.target.value = "";
 });
 function chkStart(){

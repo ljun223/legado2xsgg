@@ -849,7 +849,7 @@ private void runDomExtract(final Runnable onDone) {
                                 ? conn.getInputStream() : conn.getErrorStream();
                         byte[] body = in != null ? readAllLimited(in, 32 * 1024 * 1024) : new byte[0];
                         if (in != null) in.close();
-                        final String bodyText = new String(body, "UTF-8").trim();
+                        final String bodyText = maybeDecodeXbs(body);
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
@@ -2895,6 +2895,18 @@ private void runDomExtract(final Runnable onDone) {
         }, "chk-dl").start();
     }
 
+/** 明文 JSON 直返；否则按 XBS（XXTEA）尝试解密，失败回退原文本。 */
+    private String maybeDecodeXbs(byte[] bytes) {
+        String t = "";
+        try { t = new String(bytes, "UTF-8").trim(); } catch (Exception ignored) {}
+        if (!t.isEmpty() && (t.charAt(0) == '[' || t.charAt(0) == '{')) return t;
+        try {
+            return XbsTools.xbs2json(bytes);
+        } catch (Exception ignored) {
+            return t;
+        }
+    }
+
     /** 从订阅包原文提取 (名称,URL,原始对象)；支持阅读数组 / {"0":..} 导出 / 香色闺阁对象。 */
     private boolean extractSources(String text) {
         chkEntries.clear(); chkRows.clear(); chkWasArray = false;
@@ -3218,7 +3230,7 @@ private void runDomExtract(final Runnable onDone) {
                     try {
                         InputStream in = getContentResolver().openInputStream(uri);
                         byte[] bytes = readAllLimited(in, 8 * 1024 * 1024);
-                        final String text = new String(bytes, "UTF-8").trim();
+                        final String text = maybeDecodeXbs(bytes);
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
@@ -3241,7 +3253,7 @@ private void runDomExtract(final Runnable onDone) {
                     try {
                         InputStream in = getContentResolver().openInputStream(uri);
                         byte[] bytes = readAllLimited(in, 32 * 1024 * 1024);
-                        final String text = new String(bytes, "UTF-8").trim();
+                        final String text = maybeDecodeXbs(bytes);
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() { startCheck(text); }
@@ -3263,7 +3275,7 @@ private void runDomExtract(final Runnable onDone) {
                         String name = queryDisplayName(uri);
                         InputStream in = getContentResolver().openInputStream(uri);
                         byte[] bytes = readAllLimited(in, 8 * 1024 * 1024);
-                        final String text = new String(bytes, "UTF-8").trim();
+                        final String text = maybeDecodeXbs(bytes);
                         final String fname = name == null ? "booksource" : name;
                         runOnUiThread(new Runnable() {
                             @Override
