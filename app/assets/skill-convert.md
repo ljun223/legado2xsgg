@@ -58,7 +58,9 @@
 ### 内容操作（@ 的末段）
 - `text` / `textNodes` / `ownText` → `/text()`
 - `href` → `/@href`、`src` → `/@src`
-- `html` / `all` → `/html()`（保留标签，漫画/图片正文常用）
+- `html` / `all` 按书源类型分流：小说源（text）→ `//text()`（阅读端强制仅显文本）；
+  漫画源（comic）/视频 → 容器内 `//img/@src` 并注明懒加载站点需人工改 @data-src 等属性
+  （阅读端对漫画强制渲染 HTML 而香色闺阁不会，必须显式取图）
 - `text.xxx` 段后跟 `@text` → `//*[contains(text(),"xxx")]/text()`
 
 ### 复杂语法处理

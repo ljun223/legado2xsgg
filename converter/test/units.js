@@ -41,9 +41,14 @@ test("Default: 排除 ! 与位置", function () {
   eq(defaultRule.convertDefault("li.3@text", BASE).xpath,
      '(//li)[4]//text()');
 });
-test("Default: html 内容操作", function () {
-  var r = defaultRule.convertDefault("id.booktxt@html", { field: "content" });
-  eq(r.xpath, '//*[contains(@id,"booktxt")]/html()');
+test("Default: html/all 按书源类型分流", function () {
+  // 小说源：强制仅显文本 → //text()
+  eq(defaultRule.convertDefault("id.booktxt@html", { field: "content", src: {} }).xpath,
+     '//*[contains(@id,"booktxt")]//text()');
+  // 漫画源：显式取图 @src + 提示懒加载需人工核对
+  var r2 = defaultRule.convertDefault("class.lazy@all", { field: "content", src: { bookSourceType: 2 } });
+  eq(r2.xpath, '//*[contains(@class,"lazy")]//img/@src');
+  ok(r2.notes.some(function(n){ return n.indexOf("data-src") !== -1; }), "应有懒加载提示");
 });
 
 // ---------- cssRule ----------
@@ -158,7 +163,7 @@ test("modules: 全模块组装", function () {
   var toc = modules.buildChapterList(ctx.src, ctx);
   eq(toc.module.list, '//*[contains(@id,"list")]//dd');
   var cc = modules.buildChapterContent(ctx.src, ctx);
-  eq(cc.module.content, '//*[contains(@id,"ct")]/html()');
+  eq(cc.module.content, '//*[contains(@id,"ct")]//text()');
 });
 test("modules: bookWorld _type 模式", function () {
   var ctx = { src: mkSrc(), host: "https://x.com", jsonEnabled: false };

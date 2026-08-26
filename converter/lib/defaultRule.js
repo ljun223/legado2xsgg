@@ -16,7 +16,9 @@ var TYPE_PREFIX = ["class.", "id.", "tag.", "text.", "rel."];
 
 // 内容操作 → XPath 尾部
 // field: 'content' 表示正文规则（html 视为全部文本）
-function mapContentOp(op, field) {
+function mapContentOp(op, ctx) {
+  var field = ctx && ctx.field;
+  var stype = Number(ctx && ctx.src && ctx.src.bookSourceType) || 0;
   var notes = [];
   var xpath;
   switch (op) {
@@ -33,7 +35,19 @@ function mapContentOp(op, field) {
       break;
     case "html":
     case "all":
-      xpath = "/html()";
+      // 阅读端语义：小说源强制仅显示文本、漫画源强制渲染 HTML；
+      // 香色闺阁均不自动处理，须按类型显式转换：
+      if (stype === 2 || stype === 4) {
+        // 漫画/视频：显式取图（懒加载站点常为 data-src，提示人工核对）
+        xpath = "//img/@src";
+        notes.push("漫画/视频源：已默认取容器内 //img/@src；懒加载站点请人工改为 @data-src 或实际图片属性");
+      } else {
+        // 小说等文本源：统一后代文本
+        xpath = "//text()";
+        if (stype === 1 || stype === 3) {
+          notes.push("音频/文件源内容按文本处理，请人工确认播放地址规则");
+        }
+      }
       break;
     case "href":
       xpath = "/@href";
@@ -372,7 +386,7 @@ function convertDefault(rule, ctx) {
     var isLast = i === segs.length - 1;
     if (isLast && !hasTypePrefix(seg) && seg[0] !== "." && seg[0] !== "#" && seg[0] !== "[") {
       // 末段裸词 = 内容操作或属性
-      var m = mapContentOp(seg, ctx.field);
+      var m = mapContentOp(seg, ctx);
       acc = (acc === null ? "" : acc) + m.xpath;
       closed = true;
       notes = notes.concat(m.notes);

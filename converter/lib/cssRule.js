@@ -226,7 +226,7 @@ function convertCss(rule, ctx) {
   if (ch.error) return { error: ch.error, notes: notes.concat(ch.notes) };
   notes = notes.concat(ch.notes);
   if (content !== null) {
-    var m = require("./defaultRule").mapContentOp(content, ctx.field);
+    var m = require("./defaultRule").mapContentOp(content, ctx);
     ch.xpath += m.xpath;
     notes = notes.concat(m.notes);
   }
