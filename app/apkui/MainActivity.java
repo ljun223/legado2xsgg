@@ -2882,16 +2882,26 @@ private void runDomExtract(final Runnable onDone) {
                     conn.setRequestProperty("User-Agent",
                             "Mozilla/5.0 (Linux; Android 12; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36");
                     conn.setRequestProperty("Accept", "*/*");
+                    conn.setRequestProperty("Accept-Encoding", "identity");
                     int code = conn.getResponseCode();
                     InputStream in = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
                     byte[] b = in != null ? readAllLimited(in, 32 * 1024 * 1024) : new byte[0];
-                    final String t = new String(b, "UTF-8").trim();
+                    final String[] dec = decodeXbsVerbose(b);
+                    final boolean looksHtml = dec[0].startsWith("<")
+                            || dec[0].toLowerCase().contains("<html")
+                            || dec[0].toLowerCase().contains("just a moment");
                     runOnUiThread(new Runnable() { @Override public void run() {
-                        if (t.isEmpty() || (t.charAt(0) != '[' && t.charAt(0) != '{')) {
-                            toast("链接返回的不是书源 JSON（可能已失效）"); chkStats.setText("下载失败");
+                        if (!dec[0].isEmpty() && dec[0].charAt(0) == '{' && looksHtml) {
+                            chkStats.setText("站点返回防护/错误页，请浏览器打开链接确认后重试");
                             return;
                         }
-                        startCheck(t);
+                        if (dec[0].isEmpty() || (dec[0].charAt(0) != '[' && dec[0].charAt(0) != '{')) {
+                            String why = dec[1] != null ? dec[1] : "内容为空或格式未知";
+                            chkStats.setText("失败：" + why);
+                            toast("不是书源 JSON/XBS：" + why);
+                            return;
+                        }
+                        startCheck(dec[0]);
                     }});
                 } catch (final Exception e) {
                     runOnUiThread(new Runnable() { @Override public void run() {
@@ -2904,13 +2914,42 @@ private void runDomExtract(final Runnable onDone) {
 
 /** 明文 JSON 直返；否则按 XBS（XXTEA）尝试解密，失败回退原文本。 */
     private String maybeDecodeXbs(byte[] bytes) {
-        String t = "";
-        try { t = new String(bytes, "UTF-8").trim(); } catch (Exception ignored) {}
-        if (!t.isEmpty() && (t.charAt(0) == '[' || t.charAt(0) == '{')) return t;
+        return decodeXbsVerbose(bytes)[0];
+    }
+
+    /** 带诊断的解码：返回 [文本, 错误信息(null=成功)]。自动处理 gzip 与 XBS。 */
+    private String[] decodeXbsVerbose(byte[] bytes) {
+        String raw = "";
+        try { raw = new String(bytes, "UTF-8"); } catch (Exception ignored) {}
+        String trimmed = raw.trim();
+        if (!trimmed.isEmpty() && (trimmed.charAt(0) == '[' || trimmed.charAt(0) == '{')) {
+            return new String[]{trimmed, null};
+        }
+        byte[] work = bytes;
+        // gzip 魔数 1F 8B：部分服务器强制压缩，Java 不自动解压
+        if (bytes.length > 2 && (bytes[0] & 0xFF) == 0x1F && (bytes[1] & 0xFF) == 0x8B) {
+            try {
+                java.io.ByteArrayInputStream bin = new java.io.ByteArrayInputStream(bytes);
+                java.util.zip.GZIPInputStream gz = new java.util.zip.GZIPInputStream(bin);
+                byte[] out = readAllLimited(gz, 32 * 1024 * 1024);
+                String g = new String(out, "UTF-8").trim();
+                if (!g.isEmpty() && (g.charAt(0) == '[' || g.charAt(0) == '{')) {
+                    return new String[]{g, null};
+                }
+                work = out;
+            } catch (Exception ignored) {
+            }
+        }
         try {
-            return XbsTools.xbs2json(bytes);
-        } catch (Exception ignored) {
-            return t;
+            String j = XbsTools.xbs2json(work);
+            return new String[]{j, null};
+        } catch (Exception ex) {
+            StringBuilder hex = new StringBuilder();
+            for (int i = 0; i < Math.min(8, work.length); i++) {
+                hex.append(String.format("%02X ", work[i]));
+            }
+            return new String[]{trimmed,
+                    "XBS 解密失败(" + ex.getMessage() + ")｜前8字节: " + hex.toString().trim()};
         }
     }
 
