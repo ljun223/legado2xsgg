@@ -145,6 +145,7 @@ public class MainActivity extends Activity {
     private TextView chkStats;
     private LinearLayout chkListBox;
     private Button chkStopBtn, chkExpOkBtn, chkExpFixBtn;
+    private android.widget.CheckBox chkXbsBox;
     private volatile boolean chkRunning = false;
     private volatile boolean chkStopped = false;
     private String lastSubRaw = "";
@@ -2846,6 +2847,12 @@ private void runDomExtract(final Runnable onDone) {
         rowActLp.setMargins(0, dp(8), 0, dp(4));
         root.addView(rowAct, rowActLp);
 
+        chkXbsBox = new android.widget.CheckBox(this);
+        chkXbsBox.setText("导出为 .xbs（加密后可直接导入香色闺阁）");
+        chkXbsBox.setTextSize(12);
+        root.addView(chkXbsBox, new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         ScrollView sv = new ScrollView(this);
         chkListBox = new android.widget.LinearLayout(this);
         chkListBox.setOrientation(android.widget.LinearLayout.VERTICAL);
@@ -3155,8 +3162,14 @@ private void runDomExtract(final Runnable onDone) {
             }
             if (n == 0) { toast(fixOnly ? "没有可修正的迁移源" : "没有可导出的有效源"); return; }
             String json = outArr != null ? outArr.toString(2) : outObj.toString(2);
-            String name = (fixOnly ? "订阅迁移修正_" : "订阅可用_") + n + "个.json";
-            saveBytesToDownloadAsync(json.getBytes("UTF-8"), name);
+            String base = (fixOnly ? "订阅迁移修正_" : "订阅可用_") + n + "个";
+            if (chkXbsBox != null && chkXbsBox.isChecked()) {
+                byte[] xb = XbsTools.json2xbs(json.getBytes("UTF-8"));
+                saveBytesToDownloadAsync(xb, base + ".xbs");
+                toast("已加密为 XBS（" + xb.length + " 字节）");
+            } else {
+                saveBytesToDownloadAsync(json.getBytes("UTF-8"), base + ".json");
+            }
         } catch (Exception e) {
             toast("导出失败: " + e.getMessage());
         }

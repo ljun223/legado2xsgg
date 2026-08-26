@@ -130,6 +130,9 @@
       <button class="secondary" onclick="chkExport(false)" disabled id="chkExpOkBtn">导出可用包</button>
       <button class="secondary" onclick="chkExport(true)" disabled id="chkExpFixBtn">导出迁移修正包</button>
     </div>
+    <div style="margin-top:6px;font-size:12px;color:#475569">
+      <label><input type="checkbox" id="chkXbsBox"> 导出为 .xbs（XXTEA 加密，可直接导入香色闺阁）</label>
+    </div>
   </div>
 
   <!-- XBS 工具 -->
@@ -725,8 +728,13 @@ function chkExport(fixOnly){
     n++;
   });
   if (!n) { alert(fixOnly ? "没有可修正的迁移源" : "没有可导出的有效源"); return; }
-  var name = (fixOnly ? "订阅迁移修正_" : "订阅可用_") + n + "个.json";
-  downloadBlob(JSON.stringify(out, null, 2), name, "application/json");
+  var json = JSON.stringify(out, null, 2);
+  var base = (fixOnly ? "订阅迁移修正_" : "订阅可用_") + n + "个";
+  if ($("chkXbsBox") && $("chkXbsBox").checked) {
+    downloadBlob(json2xbs(json), base + ".xbs");
+  } else {
+    downloadBlob(json, base + ".json", "application/json");
+  }
 }
 /* ---------------- 更新通知 ---------------- */
 (function loadUpdates() {
