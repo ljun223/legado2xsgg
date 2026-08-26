@@ -36,6 +36,10 @@
   footer a { color: #6366F1; text-decoration: none; }
   input[type=file] { display: none; }
   @media (max-width: 600px) { header h1 { font-size: 18px; } .card { padding: 14px; } }
+  /* 可用性检测 */
+  #chkList { max-height: 340px; overflow: auto; border: 1px solid #E2E8F0; border-radius: 10px; padding: 8px 10px; margin-top: 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.7; display: none; background: #fff; }
+  .st-ok { color: #16A34A; } .st-moved { color: #D97706; } .st-blocked { color: #7C3AED; }
+  .st-dead { color: #DC2626; } .st-nourl, .st-unknown, .st-pending { color: #94A3B8; }
   /* 更新通知横幅 */
   .upbar { display: none; position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4F46E5, #7C3AED); color: #fff; padding: 10px 16px; box-shadow: 0 2px 10px rgba(67,56,202,.35); }
   .upbar.show { display: block; animation: updown .35s ease; }
@@ -102,6 +106,29 @@
       <button class="secondary" onclick="copyOut()" disabled id="copyBtn">复制 JSON</button>
       <button class="secondary" onclick="downloadJson()" disabled id="dlJsonBtn">下载 .json</button>
       <button class="secondary" onclick="downloadXbs()" disabled id="dlXbsBtn">加密为 XBS 并下载</button>
+    </div>
+  </div>
+
+  <!-- 书源可用性检测 -->
+  <div class="card">
+    <h2>书源可用性检测</h2>
+    <div class="desc">支持阅读/香色闺阁订阅包。粘贴订阅链接或 JSON，逐源探测 URL 可达性。<br>
+      状态说明：✔ 有效 · 🔁 已迁移(重定向后可达，导出时自动改写新地址) · ⚠ 疑似存活(Cloudflare 防护/拒绝，App 内可能仍可用) · ✗ 失效。<br>
+      <span style="color:#DC2626">网页端经公共代理解析</span>，盾站与重定向细节以 Android App 为准。</div>
+    <div class="row">
+      <button class="secondary" onclick="document.getElementById('chkFile').click()">选择文件</button>
+      <input type="file" id="chkFile" accept=".json,.txt,application/json">
+      <button class="primary" id="chkStartBtn" onclick="chkStart()">开始检测</button>
+      <button class="ghost" onclick="chkStopFlag=true">停止</button>
+    </div>
+    <div style="margin-top:8px">
+      <textarea id="chkInput" placeholder="粘贴订阅链接或书源 JSON（阅读数组 / 香色闺阁对象）…" style="min-height:70px"></textarea>
+    </div>
+    <div class="status" id="chkStats">待检测</div>
+    <div id="chkList"></div>
+    <div class="row">
+      <button class="secondary" onclick="chkExport(false)" disabled id="chkExpOkBtn">导出可用包</button>
+      <button class="secondary" onclick="chkExport(true)" disabled id="chkExpFixBtn">导出迁移修正包</button>
     </div>
   </div>
 
@@ -479,6 +506,202 @@ function clearXbs() {
   setStatus($("xbsStatus"), "");
 }
 
+/* ---------------- 书源可用性检测 ---------------- */
+var chkStopFlag = false;
+var chkRunning2 = false;
+var CHK_PENDING=0, CHK_OK=1, CHK_MOVED=2, CHK_BLOCKED=3, CHK_DEAD=4, CHK_NOURL=5, CHK_UNKNOWN=6;
+var CHK_MARK = {0:"…",1:"✔",2:"🔁",3:"⚠",4:"✗",5:"-",6:"?"};
+var CHK_CLS  = {0:"st-pending",1:"st-ok",2:"st-moved",3:"st-blocked",4:"st-dead",5:"st-nourl",6:"st-unknown"};
+
+function chkSetStats(t, cls){ var el=$("chkStats"); el.textContent=t||""; el.className="status"+(cls?" "+cls:""); }
+
+function chkParse(text){
+  var j = JSON.parse(text);
+  var entries = [];   // {name,url,state,code,err,origin,key}
+  var wasArr = Array.isArray(j);
+  var list = [], keys = [];
+  if (wasArr) {
+    j.forEach(function(it, i){
+      if (it && typeof it === "object") { list.push(it); keys.push(null); }
+    });
+  } else if (j && typeof j === "object") {
+    var numeric = j.hasOwnProperty("0") && !j.hasOwnProperty("bookSourceUrl") && !j.hasOwnProperty("sourceUrl");
+    Object.keys(j).forEach(function(k){
+      var it = j[k];
+      if (!(it && typeof it === "object")) return;
+      if (numeric) {
+        if (!(/^\d+$/.test(k))) return;
+        list.push(it); keys.push(null);
+      } else {
+        if (!it.sourceUrl && !it.bookSourceUrl) return;
+        list.push(it); keys.push(k);
+      }
+    });
+  }
+  list.forEach(function(o, i){
+    var u = String(o.bookSourceUrl || o.sourceUrl || "").trim();
+    var nm = o.bookSourceName || o.sourceName || keys[i] || ("#" + (i+1));
+    entries.push({ name: nm, url: u, state: u ? CHK_PENDING : CHK_NOURL,
+                   code: -1, err: "", origin: o, key: keys[i] });
+  });
+  return { wasArr: wasArr, obj: wasArr ? null : j, entries: entries };
+}
+
+function chkProbe(url){
+  // 经公共代理解析上游状态码；直连受 CORS 无法取状态码故跳过
+  var targets = [
+    "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(url),
+    "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
+    "https://corsproxy.io/?url=" + encodeURIComponent(url)
+  ];
+  var i = 0;
+  function once(){
+    if (i >= targets.length) return Promise.reject(new Error("全部通道失败"));
+    var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function(){ try{ctrl.abort();}catch(e){} }, 15000) : null;
+    return fetch(targets[i], { redirect: "follow" }).then(function(resp){
+      if (timer) clearTimeout(timer);
+      var code = resp.status;
+      var moved = resp.redirected && resp.ok;
+      if (!resp.ok && (code === 401 || code === 403 || code === 429)) return {state:CHK_BLOCKED, code:code};
+      if (!resp.ok && (code === 404 || code === 410 || code >= 500)) return {state:CHK_DEAD, code:code};
+      if (!resp.ok) return {state:CHK_DEAD, code:code};
+      var base = { state: moved ? CHK_MOVED : CHK_OK, code: code };
+      if (!moved) return base;
+      // 迁移：经 allorigins 信封取最终 URL（status.url），失败则留空由导出保留原址
+      return fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(url))
+        .then(function(r2){ return r2.json(); })
+        .then(function(env){
+          var f = env && env.status && env.status.url;
+          if (f && f !== url) base.fixUrl = f;
+          return base;
+        }).catch(function(){ return base; });
+    }).catch(function(err){
+      if (timer) clearTimeout(timer);
+      return once();
+    });
+  }
+  return once();
+}
+
+$("chkFile").addEventListener("change", function(ev){
+  var f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function(){ $("chkInput").value = String(rd.result); chkStart(); };
+  rd.readAsText(f, "utf-8");
+  ev.target.value = "";
+});
+function chkStart(){
+  if (chkRunning2) return;
+  var st = $("chkStats"), lb = $("chkList");
+  var text = $("chkInput").value.trim();
+  if (!text) { chkSetStats("请先粘贴订阅链接或 JSON", "err"); return; }
+  chkStopFlag = false; chkRunning2 = true;
+  $("chkStartBtn").disabled = true; lb.innerHTML = ""; lb.style.display = "block";
+  var proceed = function(jsonText){
+    var pkg;
+    try { pkg = chkParse(jsonText); } catch (e) { chkRunning2=false; $("chkStartBtn").disabled=false; chkSetStats("JSON 解析失败："+e.message,"err"); return; }
+    if (!pkg.entries.length) { chkRunning2=false; $("chkStartBtn").disabled=false; chkSetStats("未发现书源","err"); return; }
+    runChk(pkg);
+  };
+  if (/^https?:\/\/\S+$/i.test(text)) {
+    chkSetStats("⏳ 正在下载订阅链接…","");
+    fetchSubscription(text).then(proceed, function(err){
+      chkRunning2=false; $("chkStartBtn").disabled=false;
+      chkSetStats("订阅链接解析失败：" + err, "err");
+    });
+  } else proceed(text);
+}
+function runChk(pkg){
+  window.__chkPkg = pkg;
+  var st = $("chkStats");
+  var lb = $("chkList");
+  var uniq = {};
+  var urls = [];
+  pkg.entries.forEach(function(e){
+    var row = document.createElement("div");
+    applyChkRow(row, e);
+    lb.appendChild(row);
+    e.rowEl = row;
+    if (e.state !== CHK_NOURL) {
+      if (!uniq[e.url]) { uniq[e.url] = [e]; urls.push(e.url); }
+      else uniq[e.url].push(e);
+    }
+  });
+  var totalU = urls.length;
+  var done = 0;
+  function upd(){
+    var c={0:0,1:0,2:0,3:0,4:0,5:0,6:0};
+    pkg.entries.forEach(function(e){ c[e.state]++; });
+    chkSetStats("共 " + pkg.entries.length + " · 有效 " + c[1] + " · 迁移 " + c[2]
+        + " · 疑似 " + c[3] + " · 失效 " + c[4] + (c[5] ? " · 未配置 " + c[5] : "")
+        + (c[6] ? " · 未判定 " + c[6] : "") + "   [探测 " + done + "/" + totalU + "]");
+    $("chkExpOkBtn").disabled = !(c[1]||c[2]||c[3]);
+    $("chkExpFixBtn").disabled = !c[2];
+  }
+  upd();
+  var idx = 0;
+  var CONC = 6;
+  function worker(){
+    if (chkStopFlag) return Promise.resolve();
+    if (idx >= urls.length) return Promise.resolve();
+    var url = urls[idx++];
+    return chkProbe(url).then(function(res){
+      done++;
+      uniq[url].forEach(function(e){
+        e.state = res.state; e.code = res.code;
+        if (res.state === CHK_MOVED) { e.err = ""; e.fixUrl = res.fixUrl || ""; }
+        applyChkRow(e.rowEl, e);
+      });
+      upd();
+      return worker();
+    }).catch(function(){
+      done++;
+      uniq[url].forEach(function(e){ e.state = CHK_UNKNOWN; applyChkRow(e.rowEl, e); });
+      upd();
+      return worker();
+    });
+  }
+  var ws = [];
+  for (var w = 0; w < Math.min(CONC, urls.length); w++) ws.push(worker());
+  Promise.all(ws).then(function(){
+    chkRunning2 = false; $("chkStartBtn").disabled = false;
+    if (chkStopFlag) st.textContent += "（已停止）";
+  });
+}
+function applyChkRow(el, e){
+  var detail = "";
+  if (e.state===CHK_OK) detail = "("+e.code+")";
+  else if (e.state===CHK_MOVED) detail = "→ " + (e.fixUrl || "(代理已跟踪)") + " (可导出修正包)";
+  else if (e.state===CHK_BLOCKED) detail = "(HTTP "+e.code+" 防护/拒绝)";
+  else if (e.state===CHK_DEAD) detail = e.err || "(HTTP "+e.code+")";
+  else if (e.state===CHK_NOURL) detail = "未配置 URL";
+  else if (e.state===CHK_UNKNOWN) detail = "通道失败未判定";
+  el.className = CHK_CLS[e.state] || "";
+  el.textContent = (CHK_MARK[e.state]||"…") + " " + e.name + "  " + detail;
+}
+function chkExport(fixOnly){
+  var pkg = window.__chkPkg;
+  if (!pkg) return;
+  var n = 0, out;
+  if (pkg.wasArr) out = [];
+  else out = {};
+  pkg.entries.forEach(function(e){
+    var keep = fixOnly ? e.state === CHK_MOVED
+                       : (e.state === CHK_OK || e.state === CHK_MOVED || e.state === CHK_BLOCKED);
+    if (!keep) return;
+    if (e.state === CHK_MOVED && e.fixUrl) {
+      if (e.origin.bookSourceUrl !== undefined) e.origin.bookSourceUrl = e.fixUrl;
+      if (e.origin.sourceUrl !== undefined) e.origin.sourceUrl = e.fixUrl;
+    }
+    if (pkg.wasArr) out.push(e.origin); else out[e.key] = e.origin;
+    n++;
+  });
+  if (!n) { alert(fixOnly ? "没有可修正的迁移源" : "没有可导出的有效源"); return; }
+  var name = (fixOnly ? "订阅迁移修正_" : "订阅可用_") + n + "个.json";
+  downloadBlob(JSON.stringify(out, null, 2), name, "application/json");
+}
 /* ---------------- 更新通知 ---------------- */
 (function loadUpdates() {
   var KEY = "l2x_seen_ver";
