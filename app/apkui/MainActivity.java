@@ -109,6 +109,7 @@ public class MainActivity extends Activity {
     private String lastNeedUrl;
     private String lastNeedKeyword;
     private EditText urlInput;
+    private EditText subUrlInput;
     private boolean autoMode = true;
     private boolean autoRunning = false;
     private boolean manualFallback = false;
@@ -133,7 +134,30 @@ public class MainActivity extends Activity {
     private int aiMaxTokens = 8000;
     private static final int GRAB_JS_TIMEOUT = 3000;
     private static final int PICK_AI_SOURCE = 5;
+    private static final int PICK_CHK_FILE = 7;
     private TextView footerSkill;
+
+    // ---- 可用性检测 ----
+    private static final int CS_PENDING = 0, CS_OK = 1, CS_MOVED = 2, CS_BLOCKED = 3, CS_DEAD = 4, CS_NOURL = 5;
+    private android.app.Dialog chkDlg;
+    private EditText chkLinkInput;
+    private android.widget.ProgressBar chkBar;
+    private TextView chkStats;
+    private LinearLayout chkListBox;
+    private Button chkStopBtn, chkExpOkBtn, chkExpFixBtn;
+    private volatile boolean chkRunning = false;
+    private volatile boolean chkStopped = false;
+    private String lastSubRaw = "";
+    private final ArrayList<SrcEntry> chkEntries = new ArrayList<SrcEntry>();
+    private boolean chkWasArray = false;
+    private JSONArray chkArrCopy = null;
+    private JSONObject chkObjCopy = null;
+    private final ArrayList<TextView> chkRows = new ArrayList<TextView>();
+
+    private static class SrcEntry {
+        String name; String url; JSONObject origin; String objKey; int arrIdx;
+        int state = CS_PENDING; int code = -1; long ms; String finalUrl = ""; String err = "";
+    }
 
     /** 页面 DOM 提取脚本：表单（探测搜索接口）+ 链接样本 + 正文文本。 */
     private static final String DOM_SCRIPT =
@@ -391,6 +415,46 @@ private void runDomExtract(final Runnable onDone) {
 
         column.addView(sectionHeader("书源转换"));
 
+        // 订阅链接导入行（阅读订阅常以 URL 形式分享）
+        LinearLayout subRow = new LinearLayout(this);
+        subRow.setOrientation(LinearLayout.HORIZONTAL);
+        subRow.setGravity(Gravity.CENTER_VERTICAL);
+        subRow.setBackgroundResource(R.drawable.bg_searchbar);
+        subRow.setPadding(dp(4), dp(4), dp(4), dp(4));
+        subUrlInput = new EditText(this);
+        subUrlInput.setHint("粘贴阅读订阅链接，直接批量导入");
+        subUrlInput.setTextSize(12);
+        subUrlInput.setSingleLine(true);
+        subUrlInput.setBackgroundResource(0);
+        subUrlInput.setPadding(dp(10), dp(8), dp(6), dp(8));
+        subRow.addView(subUrlInput, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button subBtn = new Button(this);
+        subBtn.setText("链接导入");
+        subBtn.setBackgroundColor(0x00000000);
+        subBtn.setTextColor(0xFF4F46E5);
+        subBtn.setAllCaps(false);
+        subBtn.setTextSize(13);
+        setBtnIcon(subBtn, R.drawable.ic_globe, 0xFF4F46E5);
+        subBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String u = subUrlInput.getText().toString().trim();
+                if (u.isEmpty()) {
+                    toast("请先粘贴订阅链接");
+                    return;
+                }
+                if (!u.startsWith("http://") && !u.startsWith("https://")) {
+                    u = "https://" + u;
+                }
+                importLegado(u);
+            }
+        });
+        subRow.addView(subBtn);
+        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        subLp.setMargins(0, dp(4), 0, 0);
+        column.addView(subRow, subLp);
+
         // 文件信息条：已载入文件 / 转换结果统计
         convertInfo = new TextView(this);
         convertInfo.setTextColor(0xFF475569);
@@ -505,8 +569,18 @@ private void runDomExtract(final Runnable onDone) {
         });
         LinearLayout.LayoutParams moreLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         moreLp.setMargins(0, dp(2), 0, 0);
+        TextView moreChk = new TextView(this);
+        moreChk.setText("🔍 可用性检测");
+        moreChk.setTextColor(0xFF6366F1);
+        moreChk.setTextSize(11);
+        moreChk.setClickable(true);
+        moreChk.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) { openCheckDialog(); }
+        });
         resultMoreRow.addView(moreLegado, moreLp);
         resultMoreRow.addView(moreFile, moreLp);
+        resultMoreRow.addView(moreChk, moreLp);
         column.addView(resultMoreRow);
 
         // 清空按钮：独立一行，大号红色描边，结果态可见
@@ -598,6 +672,19 @@ private void runDomExtract(final Runnable onDone) {
             }
         });
         convertEmpty.addView(pickBtn, pickLp2);
+
+        Button chkBtn0 = new Button(this);
+        chkBtn0.setText("检测订阅可用性");
+        styleSecondary(chkBtn0);
+        chkBtn0.setTextSize(13);
+        LinearLayout.LayoutParams chkLp0 = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        chkLp0.setMargins(0, dp(6), 0, 0);
+        chkBtn0.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) { openCheckDialog(); }
+        });
+        convertEmpty.addView(chkBtn0, chkLp0);
 
         TextView tip = new TextView(this);
         tip.setText("自动识别格式：开源阅读书源直接转换为香色闺阁书源\n可一键转 XBS（加密）保存导入；也可打开 XBS/JSON 互转修改。");
@@ -721,7 +808,12 @@ private void runDomExtract(final Runnable onDone) {
                 + "}});"
                 + "}"
                 + "try{"
-                + "var __r=__lib.convert(JSON.parse(__i),{cryptoJsSource:__c||null});"
+                + "var __src=JSON.parse(__i);"
+                + "var __r=(typeof __lib.convertAll==='function')"
+                + "?__lib.convertAll(__src,{cryptoJsSource:__c||null})"
+                + ":__lib.convert(__src,{cryptoJsSource:__c||null});"
+                + "if(!__r.failures)__r.failures=[];"
+                + "if(typeof __r.count!=='number')__r.count=1;"
                 + "return JSON.stringify(__r);"
                 + "}catch(e){return JSON.stringify({error:String(e),stack:(e.stack||'').slice(0,300)});}"
                 + "})()";
@@ -732,6 +824,67 @@ private void runDomExtract(final Runnable onDone) {
         if (convWeb == null) {
             toast("转换引擎不可用");
             return;
+        }
+        // 订阅链接：自动抓取（阅读订阅常以 URL 形式分享，内容为书源 JSON 数组）
+        final String trimmed = text == null ? "" : text.trim();
+        if (trimmed.matches("(?i)https?://\\S{1,2000}")) {
+            convertInfo.setVisibility(View.VISIBLE);
+            convertInfo.setText("⏳ 正在下载订阅链接内容…");
+            appendConvertResult("");
+            final String url = trimmed;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+                        conn.setConnectTimeout(15000);
+                        conn.setReadTimeout(60000);
+                        conn.setInstanceFollowRedirects(true);
+                        conn.setRequestProperty("User-Agent",
+                                "Mozilla/5.0 (Linux; Android 12; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+                        conn.setRequestProperty("Accept", "*/*");
+                        conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9");
+                        int code = conn.getResponseCode();
+                        InputStream in = code >= 200 && code < 300
+                                ? conn.getInputStream() : conn.getErrorStream();
+                        byte[] body = in != null ? readAllLimited(in, 32 * 1024 * 1024) : new byte[0];
+                        if (in != null) in.close();
+                        final String bodyText = new String(body, "UTF-8").trim();
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (bodyText.isEmpty()) {
+                                    convertInfo.setText("订阅链接返回空内容");
+                                    return;
+                                }
+                                char c0 = bodyText.charAt(0);
+                                if (c0 != '[' && c0 != '{') {
+                                    boolean looksHtml = bodyText.startsWith("<")
+                                            || bodyText.contains("<html")
+                                            || bodyText.toLowerCase().contains("just a moment");
+                                    convertInfo.setText(looksHtml
+                                            ? "站点返回了防护页面（Cloudflare 等），App 无法直取。请在浏览器打开链接下载 .json 后用「导入开源阅读书源」选择文件"
+                                            : "订阅链接内容不是书源 JSON（首字符: " + c0 + "）");
+                                    return;
+                                }
+                                toast("已下载 " + (body.length / 1024) + " KB，开始转换…");
+                                importLegado(bodyText);
+                            }
+                        });
+                    } catch (Exception e) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                convertInfo.setText("订阅链接下载失败: " + e.getMessage());
+                            }
+                        });
+                    }
+                }
+            }, "fetch-sub").start();
+            return;
+        }
+        if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+            lastSubRaw = trimmed;   // 缓存订阅包原文，供可用性检测使用
         }
         convertInfo.setVisibility(View.VISIBLE);
         convertInfo.setText("⏳ 正在转换开源阅读书源…");
@@ -779,16 +932,27 @@ private void runDomExtract(final Runnable onDone) {
             }
             String pretty = output.toString(2);
             convertedData = pretty.getBytes("UTF-8");
+            int keyCount = output.length();
             String outerKey = "";
-            if (output.length() > 0) {
+            if (keyCount > 0) {
                 outerKey = output.keys().next();
             }
             convertedName = sanitizeFilename(
                     outerKey.isEmpty() ? "booksource" : outerKey) + ".json";
+            if (keyCount > 1) {
+                convertedName = sanitizeFilename(outerKey) + "_等" + keyCount + "个.json";
+            }
             if (convertEmpty != null) {
                 convertEmpty.setVisibility(View.GONE);
             }
+            JSONArray fails = r.optJSONArray("failures");
+            int failCount = fails == null ? 0 : fails.length();
             StringBuilder info = new StringBuilder("✓ 开源阅读书源已导入 → ").append(convertedName);
+            if (keyCount > 1 || failCount > 0) {
+                info.append("（共 ").append(String.valueOf(r.optInt("count", keyCount + failCount)))
+                        .append(" 个：成功 ").append(String.valueOf(keyCount))
+                        .append("，失败 ").append(String.valueOf(failCount)).append("）");
+            }
             JSONArray warns = r.optJSONArray("warnings");
             if (warns != null && warns.length() > 0) {
                 info.append("（").append(warns.length()).append(" 条提示）");
@@ -799,7 +963,30 @@ private void runDomExtract(final Runnable onDone) {
             if (wtext.length() > 0) {
                 preview.append("【转换提示】\n").append(wtext).append("\n\n");
             }
-            preview.append(pretty);
+            if (failCount > 0) {
+                preview.append("【失败书源】\n");
+                int shown = Math.min(failCount, 100);
+                for (int fi = 0; fi < shown; fi++) {
+                    JSONObject f = fails.optJSONObject(fi);
+                    if (f == null) continue;
+                    preview.append("第 ").append(String.valueOf(f.optInt("index", fi) + 1))
+                            .append(" 个：").append(f.optString("error", "未知错误")).append("\n");
+                }
+                if (failCount > shown) {
+                    preview.append("…其余 ").append(String.valueOf(failCount - shown)).append(" 条省略\n");
+                }
+                preview.append("\n");
+            }
+            // 大包预览截断（上千书源时 toString 可达数 MB，setText 全量会卡顿）
+            int PREVIEW_CAP = 400000;
+            if (pretty.length() > PREVIEW_CAP) {
+                preview.append(pretty.substring(0, PREVIEW_CAP))
+                        .append("\n\n…（预览已截断，完整结果共 ")
+                        .append(String.valueOf(pretty.length()))
+                        .append(" 字符，保存文件后查看全部）");
+            } else {
+                preview.append(pretty);
+            }
             appendConvertResult(preview);
             showResultRow(true);
         } catch (Exception e) {
@@ -811,22 +998,26 @@ private void runDomExtract(final Runnable onDone) {
         convertPreview.setText(text);
     }
 
-    /** 转换提示格式化：需人工处理/error/unsupported 的行标红。 */
+    /** 转换提示格式化：需人工项标红；批量场景显示 [书源名]；超量截断。 */
     private static CharSequence formatWarnings(JSONArray warns) {
         SpannableStringBuilder sb = new SpannableStringBuilder();
         if (warns == null) {
             return sb;
         }
         final int red = Color.rgb(211, 47, 47);
-        for (int i = 0; i < warns.length(); i++) {
+        final int CAP = 400;
+        int n = warns.length();
+        for (int i = 0; i < n && i < CAP; i++) {
             JSONObject w = warns.optJSONObject(i);
             if (w == null) {
                 continue;
             }
             String lvl = w.optString("level", "");
             String mod = w.optString("module", "");
+            String srcName = w.optString("source", "");
             String msg = w.optString("msg", "");
             String line = "[" + lvl + "]"
+                    + (srcName.isEmpty() ? "" : "[" + srcName + "]")
                     + (mod.isEmpty() ? "" : "[" + mod + "] ")
                     + msg + "\n";
             int start = sb.length();
@@ -835,6 +1026,9 @@ private void runDomExtract(final Runnable onDone) {
                 sb.setSpan(new ForegroundColorSpan(red), start, sb.length(),
                         SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE);
             }
+        }
+        if (n > CAP) {
+            sb.append("…其余 ").append(String.valueOf(n - CAP)).append(" 条提示已省略\n");
         }
         if (sb.length() > 0) {
             sb.delete(sb.length() - 1, sb.length());
@@ -2549,6 +2743,413 @@ private void runDomExtract(final Runnable onDone) {
         }
     }
 
+    // ---------------- 书源可用性检测 ----------------
+
+    private void openCheckDialog() {
+        if (chkDlg != null && chkDlg.isShowing()) { chkDlg.dismiss(); }
+        android.widget.LinearLayout root = new android.widget.LinearLayout(this);
+        root.setOrientation(android.widget.LinearLayout.VERTICAL);
+        root.setPadding(dp(14), dp(10), dp(14), dp(10));
+
+        // 输入行：链接
+        LinearLayout rowLink = new android.widget.LinearLayout(this);
+        rowLink.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        rowLink.setGravity(Gravity.CENTER_VERTICAL);
+        chkLinkInput = new EditText(this);
+        chkLinkInput.setHint("订阅链接（也可检测下方文件/最近包）");
+        chkLinkInput.setTextSize(12);
+        chkLinkInput.setSingleLine(true);
+        chkLinkInput.setBackgroundResource(R.drawable.input_bg);
+        chkLinkInput.setPadding(dp(8), dp(6), dp(6), dp(6));
+        rowLink.addView(chkLinkInput, new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button goBtn = new Button(this);
+        goBtn.setText("检测");
+        stylePrimary(goBtn);
+        goBtn.setTextSize(12);
+        setBtnIcon(goBtn, R.drawable.ic_globe, Color.WHITE);
+        goBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                String u = chkLinkInput.getText().toString().trim();
+                if (u.isEmpty()) { toast("请输入订阅链接"); return; }
+                if (!u.startsWith("http")) u = "https://" + u;
+                chkFetchLink(u);
+            }
+        });
+        rowLink.addView(goBtn);
+        root.addView(rowLink);
+
+        LinearLayout rowSrc = new android.widget.LinearLayout(this);
+        rowSrc.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        Button fBtn = new Button(this);
+        fBtn.setText("选择文件检测");
+        styleSecondary(fBtn); fBtn.setTextSize(11);
+        fBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openDocumentPicker(PICK_CHK_FILE); }
+        });
+        rowSrc.addView(fBtn, new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button lastBtn = new Button(this);
+        lastBtn.setText("检测最近载入的订阅");
+        styleSecondary(lastBtn); lastBtn.setTextSize(11);
+        lastBtn.setEnabled(lastSubRaw != null && !lastSubRaw.isEmpty());
+        lastBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { startCheck(lastSubRaw); }
+        });
+        android.widget.LinearLayout.LayoutParams lpL = new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lpL.setMargins(dp(6), 0, 0, 0);
+        rowSrc.addView(lastBtn, lpL);
+        android.widget.LinearLayout.LayoutParams rowSrcLp = new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowSrcLp.setMargins(0, dp(8), 0, 0);
+        root.addView(rowSrc, rowSrcLp);
+
+        chkBar = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        chkBar.setMax(100);
+        root.addView(chkBar, new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(18)));
+        chkStats = new TextView(this);
+        chkStats.setText("待检测");
+        chkStats.setTextSize(12);
+        chkStats.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(chkStats);
+
+        LinearLayout rowAct = new android.widget.LinearLayout(this);
+        rowAct.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        chkStopBtn = new Button(this);
+        chkStopBtn.setText("停止");
+        styleSecondary(chkStopBtn); chkStopBtn.setTextSize(12);
+        chkStopBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { chkStopped = true; }
+        });
+        rowAct.addView(chkStopBtn, new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        chkExpOkBtn = new Button(this);
+        chkExpOkBtn.setText("导出可用包");
+        stylePrimary(chkExpOkBtn); chkExpOkBtn.setTextSize(12);
+        chkExpOkBtn.setEnabled(false);
+        chkExpOkBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { exportChecked(false); }
+        });
+        android.widget.LinearLayout.LayoutParams lpM = new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lpM.setMargins(dp(6), 0, 0, 0);
+        rowAct.addView(chkExpOkBtn, lpM);
+        chkExpFixBtn = new Button(this);
+        chkExpFixBtn.setText("迁移修正包");
+        styleSecondary(chkExpFixBtn); chkExpFixBtn.setTextSize(12);
+        chkExpFixBtn.setEnabled(false);
+        chkExpFixBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { exportChecked(true); }
+        });
+        android.widget.LinearLayout.LayoutParams lpM2 = new android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lpM2.setMargins(dp(6), 0, 0, 0);
+        rowAct.addView(chkExpFixBtn, lpM2);
+        android.widget.LinearLayout.LayoutParams rowActLp = new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowActLp.setMargins(0, dp(8), 0, dp(4));
+        root.addView(rowAct, rowActLp);
+
+        ScrollView sv = new ScrollView(this);
+        chkListBox = new android.widget.LinearLayout(this);
+        chkListBox.setOrientation(android.widget.LinearLayout.VERTICAL);
+        sv.addView(chkListBox, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        android.widget.LinearLayout.LayoutParams svLp = new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(360));
+        svLp.setMargins(0, dp(4), 0, 0);
+        root.addView(sv, svLp);
+
+        chkDlg = new android.app.Dialog(this);
+        chkDlg.setTitle("书源可用性检测");
+        chkDlg.setContentView(root,
+                new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        chkDlg.show();
+    }
+
+    private void chkFetchLink(final String url) {
+        if (chkRunning) { toast("检测进行中"); return; }
+        chkStats.setText("⏳ 正在下载订阅链接…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+                    conn.setConnectTimeout(15000); conn.setReadTimeout(60000);
+                    conn.setInstanceFollowRedirects(true);
+                    conn.setRequestProperty("User-Agent",
+                            "Mozilla/5.0 (Linux; Android 12; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36");
+                    conn.setRequestProperty("Accept", "*/*");
+                    int code = conn.getResponseCode();
+                    InputStream in = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
+                    byte[] b = in != null ? readAllLimited(in, 32 * 1024 * 1024) : new byte[0];
+                    final String t = new String(b, "UTF-8").trim();
+                    runOnUiThread(new Runnable() { @Override public void run() {
+                        if (t.isEmpty() || (t.charAt(0) != '[' && t.charAt(0) != '{')) {
+                            toast("链接返回的不是书源 JSON（可能已失效）"); chkStats.setText("下载失败");
+                            return;
+                        }
+                        startCheck(t);
+                    }});
+                } catch (final Exception e) {
+                    runOnUiThread(new Runnable() { @Override public void run() {
+                        chkStats.setText("下载失败: " + e.getMessage());
+                    }});
+                }
+            }
+        }, "chk-dl").start();
+    }
+
+    /** 从订阅包原文提取 (名称,URL,原始对象)；支持阅读数组 / {"0":..} 导出 / 香色闺阁对象。 */
+    private boolean extractSources(String text) {
+        chkEntries.clear(); chkRows.clear(); chkWasArray = false;
+        chkArrCopy = null; chkObjCopy = null;
+        try {
+            Object j = new org.json.JSONTokener(text).nextValue();
+            ArrayList<JSONObject> items = new ArrayList<JSONObject>();
+            ArrayList<String> keys = new ArrayList<String>();
+            if (j instanceof JSONArray) {
+                JSONArray a = (JSONArray) j;
+                for (int i = 0; i < a.length(); i++) {
+                    JSONObject o = a.optJSONObject(i);
+                    if (o == null) continue;
+                    items.add(o); keys.add(null);
+                }
+                chkWasArray = true;
+                chkArrCopy = new JSONArray();
+                for (JSONObject o : items) chkArrCopy.put(o);
+            } else if (j instanceof JSONObject) {
+                JSONObject jo = (JSONObject) j;
+                if (jo.has("0") && !jo.has("bookSourceUrl") && !jo.has("sourceUrl")) {
+                    chkWasArray = true;
+                    chkArrCopy = new JSONArray();
+                    int i = 0;
+                    while (jo.has(String.valueOf(i))) {
+                        JSONObject o = jo.optJSONObject(String.valueOf(i));
+                        if (o != null) { items.add(o); keys.add(null); chkArrCopy.put(o); }
+                        i++;
+                    }
+                } else {
+                    chkObjCopy = new JSONObject();
+                    java.util.Iterator<String> it = jo.keys();
+                    while (it.hasNext()) {
+                        String k = it.next();
+                        JSONObject o = jo.optJSONObject(k);
+                        if (o == null) continue;
+                        if (!o.has("sourceUrl") && !o.has("bookSourceUrl")) continue;
+                        items.add(o); keys.add(k);
+                        chkObjCopy.put(k, o);
+                    }
+                }
+            }
+            for (int i = 0; i < items.size(); i++) {
+                JSONObject o = items.get(i);
+                SrcEntry e = new SrcEntry();
+                e.origin = o; e.objKey = keys.get(i); e.arrIdx = i;
+                String u = o.optString("bookSourceUrl", "");
+                if (u.isEmpty()) u = o.optString("sourceUrl", "");
+                e.url = u.trim();
+                e.name = o.optString("bookSourceName", o.optString("sourceName", ""));
+                if (e.name.isEmpty()) e.name = e.objKey != null ? e.objKey : ("#" + (i + 1));
+                if (e.url.isEmpty()) e.state = CS_NOURL;
+                chkEntries.add(e);
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void startCheck(final String rawText) {
+        if (chkRunning) { toast("检测进行中，可点停止"); return; }
+        if (rawText == null || rawText.trim().isEmpty()) { toast("内容为空"); return; }
+        if (!extractSources(rawText.trim())) { toast("JSON 解析失败"); return; }
+        if (chkEntries.isEmpty()) { toast("未发现书源"); return; }
+        chkStopped = false; chkRunning = true;
+        chkExpOkBtn.setEnabled(false); chkExpFixBtn.setEnabled(false);
+        chkStopBtn.setEnabled(true);
+        chkListBox.removeAllViews(); chkRows.clear();
+
+        java.util.LinkedHashMap<String, ArrayList<SrcEntry>> uniq =
+                new java.util.LinkedHashMap<String, ArrayList<SrcEntry>>();
+        int uniqueCount = 0;
+        for (SrcEntry e : chkEntries) {
+            chkRows.add(addChkRow(e));
+            if (e.state == CS_NOURL) continue;
+            ArrayList<SrcEntry> lst = uniq.get(e.url);
+            if (lst == null) { lst = new ArrayList<SrcEntry>(); uniq.put(e.url, lst); uniqueCount++; }
+            lst.add(e);
+        }
+        final int totalU = uniqueCount;
+        chkBar.setMax(Math.max(1, totalU)); chkBar.setProgress(0);
+        updChkStats(totalU, 0);
+        if (totalU == 0) { chkRunning = false; return; }
+
+        final java.util.concurrent.ExecutorService pool =
+                java.util.concurrent.Executors.newFixedThreadPool(16);
+        final java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger(0);
+        final ArrayList<ArrayList<SrcEntry>> lists = new ArrayList<ArrayList<SrcEntry>>(uniq.values());
+        for (final ArrayList<SrcEntry> grp : lists) {
+            pool.execute(new Runnable() { @Override public void run() {
+                if (chkStopped) return;
+                probe(grp.get(0));
+                synchronized (grp) {
+                    for (SrcEntry d : grp) {
+                        if (d == grp.get(0)) continue;
+                        d.state = grp.get(0).state; d.code = grp.get(0).code;
+                        d.ms = grp.get(0).ms; d.finalUrl = grp.get(0).finalUrl; d.err = grp.get(0).err;
+                    }
+                }
+                int dn = done.incrementAndGet();
+                runOnUiThread(new Runnable() { @Override public void run() {
+                    chkBar.setProgress(dn);
+                    updChkStats(totalU, dn);
+                    for (SrcEntry d : grp) updateChkRow(d);
+                    maybeChkDone(totalU, done.get());
+                }});
+            }});
+        }
+        pool.shutdown();
+    }
+
+    private void maybeChkDone(int total, int dn) {
+        if (dn >= total || chkStopped) {
+            chkRunning = false;
+            chkStopBtn.setEnabled(false);
+            boolean anyOk=false, anyMoved=false;
+            for (SrcEntry e : chkEntries) {
+                if (e.state==CS_OK||e.state==CS_BLOCKED) anyOk=true;
+                if (e.state==CS_MOVED) anyMoved=true;
+            }
+            chkExpOkBtn.setEnabled(anyOk||anyMoved);
+            chkExpFixBtn.setEnabled(anyMoved);
+            if (chkStopped) chkStats.append("（已停止）");
+        }
+    }
+
+    private void probe(SrcEntry e) {
+        long t0 = System.currentTimeMillis();
+        String current = e.url;
+        if (!current.startsWith("http://") && !current.startsWith("https://")) current = "https://" + current;
+        int code = -1;
+        boolean sawRedirect = false;
+        String err = null;
+        boolean cf = false;
+        HttpURLConnection c = null;
+        try {
+            for (int hop = 0; hop < 6; hop++) {
+                c = (HttpURLConnection) new URL(current).openConnection();
+                c.setInstanceFollowRedirects(false);
+                c.setConnectTimeout(8000); c.setReadTimeout(10000);
+                c.setRequestProperty("User-Agent",
+                        "Mozilla/5.0 (Linux; Android 12; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36");
+                c.setRequestProperty("Accept", "*/*");
+                code = c.getResponseCode();
+                String srv = c.getHeaderField("server");
+                cf = (srv != null && srv.toLowerCase().contains("cloudflare"))
+                        || c.getHeaderField("cf-ray") != null
+                        || c.getHeaderField("cf-mitigated") != null;
+                if (code >= 300 && code < 400) {
+                    String loc = c.getHeaderField("Location");
+                    if (loc == null) break;
+                    String abs = new URL(new URL(current), loc).toString();
+                    if (abs.equals(current)) break;
+                    sawRedirect = true;
+                    current = abs;
+                    try { c.disconnect(); } catch (Exception ignored) {}
+                    c = null;
+                    continue;
+                }
+                break;
+            }
+        } catch (java.net.UnknownHostException ue) { err = "DNS 解析失败";
+        } catch (java.net.SocketTimeoutException te) { err = "超时";
+        } catch (java.net.ConnectException ce) { err = "连接被拒";
+        } catch (Exception ex) { err = ex.getClass().getSimpleName(); }
+        if (c != null) { try { c.disconnect(); } catch (Exception ignored) {} }
+        e.ms = System.currentTimeMillis() - t0;
+        e.code = code; e.finalUrl = current; e.err = err;
+        if (err != null) { e.state = CS_DEAD; return; }
+        if (sawRedirect && code >= 200 && code < 300) { e.state = CS_MOVED; return; }
+        if (code >= 200 && code < 300) { e.state = CS_OK; return; }
+        if (code == 401 || code == 403 || code == 429 || cf) { e.state = CS_BLOCKED; return; }
+        if (code == 404 || code == 410 || code >= 500) { e.state = CS_DEAD; return; }
+        e.state = CS_DEAD;
+    }
+
+    private TextView addChkRow(SrcEntry e) {
+        TextView tv = new TextView(this);
+        tv.setTextSize(11);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setPadding(dp(2), dp(3), dp(2), dp(3));
+        applyChkRow(tv, e);
+        chkListBox.addView(tv, new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return tv;
+    }
+    private void updateChkRow(SrcEntry e) {
+        int idx = chkEntries.indexOf(e);
+        if (idx >= 0 && idx < chkRows.size()) applyChkRow(chkRows.get(idx), e);
+    }
+    private void applyChkRow(TextView tv, SrcEntry e) {
+        String mark; int color;
+        switch (e.state) {
+            case CS_OK: mark="✔"; color=0xFF16A34A; break;
+            case CS_MOVED: mark="🔁"; color=0xFFD97706; break;
+            case CS_BLOCKED: mark="⚠"; color=0xFF7C3AED; break;
+            case CS_DEAD: mark="✗"; color=0xFFDC2626; break;
+            case CS_NOURL: mark="-"; color=0xFF94A3B8; break;
+            default: mark="…"; color=0xFF94A3B8; break;
+        }
+        String detail = "";
+        if (e.state==CS_OK) detail="("+e.ms+"ms)";
+        else if (e.state==CS_MOVED) detail="→ "+e.finalUrl+" ("+e.ms+"ms)";
+        else if (e.state==CS_BLOCKED) detail="(HTTP "+e.code+(e.err==null?"":" "+e.err)+" 防护/拒绝)";
+        else if (e.state==CS_DEAD) detail=(e.err!=null?e.err:"HTTP "+e.code);
+        else if (e.state==CS_NOURL) detail="未配置 URL";
+        tv.setText(mark + " " + e.name + "  " + detail);
+        tv.setTextColor(color);
+    }
+    private void updChkStats(int totalU, int dn) {
+        int ok=0,mv=0,bk=0,dd=0,nu=0,pend=0;
+        for (SrcEntry e : chkEntries) {
+            switch (e.state) {
+                case CS_OK: ok++; break;
+                case CS_MOVED: mv++; break;
+                case CS_BLOCKED: bk++; break;
+                case CS_DEAD: dd++; break;
+                case CS_NOURL: nu++; break;
+                default: pend++;
+            }
+        }
+        chkStats.setText("共 " + chkEntries.size()
+                + " · 有效 " + ok + " · 迁移 " + mv
+                + " · 疑似 " + bk + " · 失效 " + dd
+                + (nu>0?" · 未配置 "+nu:"")
+                + "   [探测进度 " + dn + "/" + totalU + "]");
+    }
+
+    private void exportChecked(boolean fixOnly) {
+        try {
+            JSONArray outArr = chkWasArray ? new JSONArray() : null;
+            JSONObject outObj = chkWasArray ? null : new JSONObject();
+            int n = 0;
+            for (SrcEntry e : chkEntries) {
+                boolean keep = fixOnly ? e.state == CS_MOVED
+                        : (e.state == CS_OK || e.state == CS_MOVED || e.state == CS_BLOCKED);
+                if (!keep) continue;
+                JSONObject o = e.origin;
+                if (e.state == CS_MOVED && e.finalUrl != null && !e.finalUrl.isEmpty()) {
+                    if (o.has("bookSourceUrl")) o.put("bookSourceUrl", e.finalUrl);
+                    if (o.has("sourceUrl")) o.put("sourceUrl", e.finalUrl);
+                }
+                if (outArr != null) outArr.put(o); else outObj.put(e.objKey, o);
+                n++;
+            }
+            if (n == 0) { toast(fixOnly ? "没有可修正的迁移源" : "没有可导出的有效源"); return; }
+            String json = outArr != null ? outArr.toString(2) : outObj.toString(2);
+            String name = (fixOnly ? "订阅迁移修正_" : "订阅可用_") + n + "个.json";
+            saveBytesToDownloadAsync(json.getBytes("UTF-8"), name);
+        } catch (Exception e) {
+            toast("导出失败: " + e.getMessage());
+        }
+    }
+
     // ---------------- 系统回调 ----------------
 
     @Override
@@ -2629,6 +3230,27 @@ private void runDomExtract(final Runnable onDone) {
                     }
                 }
             }, "read-legado").start();
+            return;
+        }
+        if (requestCode == PICK_CHK_FILE && resultCode == RESULT_OK && data != null
+                && data.getData() != null) {
+            final Uri uri = data.getData();
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        InputStream in = getContentResolver().openInputStream(uri);
+                        byte[] bytes = readAllLimited(in, 32 * 1024 * 1024);
+                        final String text = new String(bytes, "UTF-8").trim();
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() { startCheck(text); }
+                        });
+                    } catch (final Exception e) {
+                        toast("读取文件失败: " + e.getMessage());
+                    }
+                }
+            }, "read-chk").start();
             return;
         }
         if (requestCode == PICK_AI_SOURCE && resultCode == RESULT_OK && data != null
