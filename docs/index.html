@@ -87,7 +87,7 @@
     </div>
     <div class="row">
       <button class="secondary" onclick="document.getElementById('legadoFile').click()">选择 JSON 文件</button>
-      <input type="file" id="legadoFile" accept=".json,.txt,application/json">
+      <input type="file" id="legadoFile" accept=".json,.txt,.xbs,application/json,application/octet-stream">
       <button class="ghost" onclick="loadSample()">填入示例</button>
       <button class="ghost" onclick="clearAll()">清空</button>
     </div>
@@ -112,12 +112,12 @@
   <!-- 书源可用性检测 -->
   <div class="card">
     <h2>书源可用性检测</h2>
-    <div class="desc">支持阅读/香色闺阁订阅包。粘贴订阅链接或 JSON，逐源探测 URL 可达性。<br>
+    <div class="desc">支持阅读/香色闺阁订阅包（含 .xbs 加密包）。粘贴订阅链接、JSON 或直接选择文件，逐源探测 URL 可达性。<br>
       状态说明：✔ 有效 · 🔁 已迁移(重定向后可达，导出时自动改写新地址) · ⚠ 疑似存活(Cloudflare 防护/拒绝，App 内可能仍可用) · ✗ 失效。<br>
       <span style="color:#DC2626">网页端经公共代理解析</span>，盾站与重定向细节以 Android App 为准。</div>
     <div class="row">
       <button class="secondary" onclick="document.getElementById('chkFile').click()">选择文件</button>
-      <input type="file" id="chkFile" accept=".json,.txt,.xbs,application/json">
+      <input type="file" id="chkFile" accept=".json,.txt,.xbs,application/json,application/octet-stream">
       <button class="primary" id="chkStartBtn" onclick="chkStart()">开始检测</button>
       <button class="ghost" onclick="chkStopFlag=true">停止</button>
     </div>
@@ -486,22 +486,22 @@ function downloadXbs() {
 $("legadoFile").addEventListener("change", function (ev) {
   var f = ev.target.files && ev.target.files[0];
   if (!f) return;
-  var isXbs = /\.xbs$/i.test(f.name);
+  setStatus($("status"), "⏳ 正在读取 " + f.name + "…", "");
   var rd = new FileReader();
   rd.onload = function () {
-    var text;
-    if (isXbs) {
-      try { text = xbs2json(new Uint8Array(rd.result)); }
-      catch (e) { setStatus($("status"), "XBS 解密失败：" + e.message, "err"); return; }
-      $("input").value = text;
-    } else {
-      text = String(rd.result);
-      $("input").value = text;
+    var buf = new Uint8Array(rd.result);
+    var text = null;
+    try { text = decodeMaybeXbs(buf); } catch (e) {}
+    if (text === null || !text.trim() || (text.trim().charAt(0) !== "[" && text.trim().charAt(0) !== "{")) {
+      setStatus($("status"), "无法解析：" + f.name + "（既非明文书源 JSON 也非有效 XBS）", "err");
+      return;
     }
+    $("input").value = text;
     setStatus($("status"), "已载入 " + f.name + "（" + text.length + " 字符），点「开始转换」", "");
     doConvert();
   };
-  if (isXbs) rd.readAsArrayBuffer(f); else rd.readAsText(f, "utf-8");
+  rd.onerror = function(){ setStatus($("status"), "读取文件失败", "err"); };
+  rd.readAsArrayBuffer(f);
   ev.target.value = "";
 });
 $("xbsFile").addEventListener("change", function (ev) {
@@ -613,11 +613,20 @@ function chkProbe(url){
 $("chkFile").addEventListener("change", function(ev){
   var f = ev.target.files && ev.target.files[0];
   if (!f) return;
+  chkSetStats("⏳ 正在读取 " + f.name + "…", "");
   var rd = new FileReader();
   rd.onload = function(){
-    try { $("chkInput").value = decodeMaybeXbs(new Uint8Array(rd.result)); } catch (e) {}
+    var buf = new Uint8Array(rd.result);
+    var txt = null;
+    try { txt = decodeMaybeXbs(buf); } catch (e) {}
+    if (txt === null || !txt.trim() || (txt.trim().charAt(0) !== "[" && txt.trim().charAt(0) !== "{")) {
+      chkSetStats("无法解析：" + f.name + "（既非明文书源 JSON 也非有效 XBS）", "err");
+      return;
+    }
+    $("chkInput").value = txt;
     chkStart();
   };
+  rd.onerror = function(){ chkSetStats("读取文件失败", "err"); };
   rd.readAsArrayBuffer(f);
   ev.target.value = "";
 });
