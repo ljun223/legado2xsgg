@@ -17,6 +17,7 @@ function load(name) {
 var WHITELIST = {
   ".sourceType": "mine 新增字段（bookSourceType 映射 text/audio/comic/video），golden 无",
   ".bookDetail.desc": "mine @text → //text()（含后代，防内嵌标签漏字）",
+  ".chapterContent.moreKeys": "mine 新增 maxPage 默认 6（nextPageUrl 存在时规则要求必填）",
   ".chapterList.title": "同上语义升级",
   ".bookWorld.分类.desc": "同上语义升级",
   ".sourceUrl": "golden 去掉尾部 /，mine 保留后由转换器统一去掉（应一致）",

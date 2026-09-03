@@ -2409,6 +2409,7 @@ function base(moduleName, host, jsonEnabled) {
 function pickFields(src, mapping, ctx) {
   var out = {};
   var warnings = [];
+  var htmlKeys = [];
   for (var i = 0; i < mapping.length; i++) {
     var legadoKey = mapping[i][0];
     var xsggKey = mapping[i][1];
@@ -2428,8 +2429,19 @@ function pickFields(src, mapping, ctx) {
     if (r.value === "") continue;
     out[xsggKey] = r.value;
     warnings = warnings.concat(r.warnings);
+    // html/all 结尾字段 → 注册 removeHtmlKeys（XSGG 原生剥标签去 script）
+    if (endsWithHtmlOp(String(raw))) htmlKeys.push(xsggKey);
   }
-  return { out: out, warnings: warnings };
+  return { out: out, warnings: warnings, htmlKeys: htmlKeys };
+}
+
+/** 原始规则以 @html / @all 内容操作为结尾（容忍尾部 ##净化 与空白）。 */
+function endsWithHtmlOp(raw) {
+  var t = raw;
+  var cl = utils.findCleanup(t);
+  if (cl) t = t.slice(0, cl.start);
+  t = t.trim();
+  return /@(html|all)\s*$/i.test(t);
 }
 
 // searchBook
@@ -2467,6 +2479,13 @@ function buildSearchBook(src, ctx) {
   ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
+  applyRemoveHtmlKeys(m, p, warnings);
+  // 搜索分页：URL 含 {{page}} 时按页号分页 → maxPage 兜底上限
+  if (String(src.searchUrl).indexOf("{{page}}") !== -1) {
+    m.moreKeys = m.moreKeys || {};
+    m.moreKeys.maxPage = 20;
+    warnings.push({ level: "degraded", msg: "搜索分页：maxPage 默认 20，请按站点实际分页数调整" });
+  }
   return { module: m, warnings: warnings };
 }
 
@@ -2495,6 +2514,7 @@ function buildBookDetail(src, ctx) {
   ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
+  applyRemoveHtmlKeys(m, p, warnings);
   return { module: m, warnings: warnings };
 }
 
@@ -2521,7 +2541,41 @@ function buildChapterList(src, ctx) {
   if (src.ruleToc.chapterUrl && /^[^\/\s]/.test(String(src.ruleToc.chapterUrl).trim())) {
     warnings.push({ level: "degraded", msg: "章节 URL 规则可能产出相对路径，XSGG 需要绝对 URL，请人工确认" });
   }
+  applyRemoveHtmlKeys(m, p, warnings);
+  // 目录分页：nextTocUrl → nextPageUrl 已映射，maxPage 必填（规则要求）
+  if (p.out.nextPageUrl) {
+    m.moreKeys = m.moreKeys || {};
+    m.moreKeys.maxPage = 20;
+    warnings.push({ level: "degraded", msg: "目录分页：maxPage 默认 20，请按站点实际最大目录页数调整" });
+  }
+  // skipCount：阅读端列表忽略头部 N 条（slice(N) / [!0..k] / [N:]）
+  var skipN = detectSkipCount(String(src.ruleToc.chapterList || ""));
+  if (skipN > 0) {
+    m.moreKeys = m.moreKeys || {};
+    m.moreKeys.skipCount = skipN;
+    warnings.push({ level: "note", msg: "已识别目录列表忽略头部 " + skipN + " 条 → moreKeys.skipCount" });
+  }
   return { module: m, warnings: warnings };
+}
+
+/** 从列表规则中识别「忽略头部 N 条」：
+ *  <js>...slice(N)...</js> / [N:] 起始索引 / [!0,1,..,k-1] 前缀排除。返回 N 或 -1。 */
+function detectSkipCount(rule) {
+  var m1 = rule.match(/slice\s*\(\s*(\d+)/);
+  if (m1) return parseInt(m1[1], 10);
+  var m2 = rule.match(/\[(\d+):\]/);
+  if (m2) return parseInt(m2[1], 10);
+  var m3 = rule.match(/\[!(\d+(?:\s*,\s*\d+)*)\]/);
+  if (m3) {
+    var parts = m3[1].split(/\s*,\s*/);
+    var k = 0;
+    for (var i = 0; i < parts.length; i++) {
+      if (parseInt(parts[i], 10) !== i) return -1;
+      k = i + 1;
+    }
+    return k;
+  }
+  return -1;
 }
 
 // chapterContent
@@ -2542,6 +2596,13 @@ function buildChapterContent(src, ctx) {
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
 
+  // 正文分页：nextContentUrl → nextPageUrl 已映射，maxPage 必填（规则要求）
+  if (p.out.nextPageUrl) {
+    m.moreKeys = m.moreKeys || {};
+    m.moreKeys.maxPage = 6;
+    warnings.push({ level: "degraded", msg: "正文分页：maxPage 默认 6，请按站点实际最大正文分页数调整" });
+  }
+
   // replaceRegex（##正则##替换 净化）→ content 尾部 ||@js: 后处理
   var rrRaw = src.ruleContent.replaceRegex;
   if (rrRaw !== undefined && rrRaw !== null && String(rrRaw).trim() !== "") {
@@ -2561,6 +2622,15 @@ function buildChapterContent(src, ctx) {
     }
   }
   return { module: m, warnings: warnings };
+}
+
+/** 模块级 removeHtmlKeys：html/all 结尾的文本字段由 XSGG 原生剥标签去 script。 */
+function applyRemoveHtmlKeys(m, p, warnings) {
+  if (p.htmlKeys && p.htmlKeys.length) {
+    m.moreKeys = m.moreKeys || {};
+    m.moreKeys.removeHtmlKeys = p.htmlKeys.slice();
+    warnings.push({ level: "note", msg: "字段 " + p.htmlKeys.join("/") + " 规则以 @html 结尾 → 已注册 removeHtmlKeys（App 端自动剥标签）" });
+  }
 }
 
 /** 解析阅读净化规则：##正则##替换（替换可省略）。 */
@@ -2741,6 +2811,7 @@ function buildBookWorld(src, ctx) {
   ], jctx);
   Object.keys(p.out).forEach(function (k) { m[k] = p.out[k]; });
   warnings = warnings.concat(p.warnings);
+  applyRemoveHtmlKeys(m, p, warnings);
 
   // ===== 分类多分组：{{}} 归一化后按「tail+post 分页结构」聚合，可产出多个独立分类页 =====
   // 每行分解为：base(根路径) + "/" + tail(连接段,可空) + {{页码表达式}} + post(后缀)

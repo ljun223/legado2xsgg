@@ -23,6 +23,10 @@
 | ruleContent | chapterContent | |
 | exploreUrl + ruleExplore | bookWorld.分类 | 见分类章节 |
 | ruleContent.replaceRegex（##正则##替换） | content 尾部 `\|\|@js:` 净化 | `/正则/gi` 全局替换；已有后处理则并入其 return 链 |
+| nextTocUrl / nextContentUrl | nextPageUrl + `moreKeys.maxPage` | 规则要求 nextPageUrl 存在时 maxPage 必填；默认目录 20 / 正文 6，degraded 提示人工调整 |
+| searchUrl/exploreUrl 含 `{{page}}` | `moreKeys.maxPage: 20` | 分页上限兜底，防死循环；提示人工调整 |
+| 列表 `slice(N)` / `[N:]` / `[!0..k]` | `moreKeys.skipCount: N` | 忽略列表头部 N 条 |
+| 字段规则以 `@html`/`@all` 结尾 | `moreKeys.removeHtmlKeys` | XSGG 原生剥标签去 script（bookName/author/desc 等文本字段） |
 | enabledCookieJar=false | 各请求注入 `forbidCookie: true` | 不携带 Cookie |
 | weight 未填时默认 9999 | weight | 显式值保留 |
 | header（JSON 字符串） | httpHeaders | 顶层对象；UA/Referer/Cookie 等站点必需头 |

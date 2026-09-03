@@ -401,7 +401,27 @@ test("urlRule: webView GET 与 forbidCookie", function () {
   ok(r2.requestInfo.indexOf("forbidCookie: true") !== -1, "enabledCookieJar=false 应注入 forbidCookie");
 });
 
+// ---------- moreKeys（pageSize/maxPage/skipCount/removeHtmlKeys） ----------
+test("moreKeys: 目录/正文/搜索分页 maxPage", function () {
+  var C = { host: "https://x.com", jsonEnabled: false, src: { bookSourceUrl: "https://x.com" } };
+  var toc = modules.buildChapterList(mkSrc({ ruleToc: { chapterList: "class.l", chapterName: "text", chapterUrl: "a@href", nextTocUrl: "a@href" } }), C);
+  eq(toc.module.moreKeys.maxPage, 20);
+  var cc = modules.buildChapterContent(mkSrc({ ruleContent: { content: "class.c@text", nextContentUrl: "a@href" } }), C);
+  eq(cc.module.moreKeys.maxPage, 6);
+  var sb = modules.buildSearchBook(mkSrc({ searchUrl: "/s/{{key}}&p={{page}}" }), C);
+  eq(sb.module.moreKeys.maxPage, 20);
+  var sb2 = modules.buildSearchBook(mkSrc({ searchUrl: "/s/{{key}}" }), C);
+  ok(!sb2.module.moreKeys, "无分页不应输出 maxPage");
+});
+test("moreKeys: skipCount 与 removeHtmlKeys", function () {
+  var C = { host: "https://x.com", jsonEnabled: false, src: { bookSourceUrl: "https://x.com" } };
+  var toc = modules.buildChapterList(mkSrc({ ruleToc: { chapterList: "<js>result.slice(6)</js>", chapterName: "text", chapterUrl: "a@href" } }), C);
+  eq(toc.module.moreKeys.skipCount, 6);
+  var sb = modules.buildSearchBook(mkSrc({ ruleSearch: { bookList: "class.i", name: "h3@html", bookUrl: "a@href" } }), C);
+  ok(sb.module.moreKeys.removeHtmlKeys && sb.module.moreKeys.removeHtmlKeys[0] === "bookName",
+     "html 结尾字段应注册 removeHtmlKeys");
+});
+
 console.log("");
 console.log(failures === 0 ? "全部通过（" + tests.length + " 项）" : failures + " 项失败");
 process.exit(failures === 0 ? 0 : 1);
-
