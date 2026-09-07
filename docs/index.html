@@ -311,9 +311,9 @@ function decodeMaybeXbs(bytes) {
   for (var i = 0; i < Math.min(16, bytes.length); i++) head += String.fromCharCode(bytes[i]);
   var h = head.replace(/\s+/g, "");
   if (h.charAt(0) === "[" || h.charAt(0) === "{") {
-    return new TextDecoder("utf-8").decode(bytes);
+    return new TextDecoder("utf-8").decode(bytes).replace(/^\uFEFF/, "").trim();
   }
-  try { return xbs2json(bytes); } catch (e) {
+  try { return xbs2json(bytes).replace(/^\uFEFF/, "").trim(); } catch (e) {
     return new TextDecoder("utf-8").decode(bytes);
   }
 }
@@ -542,6 +542,7 @@ var CHK_CLS  = {0:"st-pending",1:"st-ok",2:"st-moved",3:"st-blocked",4:"st-dead"
 function chkSetStats(t, cls){ var el=$("chkStats"); el.textContent=t||""; el.className="status"+(cls?" "+cls:""); }
 
 function chkParse(text){
+  text = String(text == null ? "" : text).replace(/^\uFEFF/, "");
   var j = JSON.parse(text);
   var entries = [];   // {name,url,state,code,err,origin,key}
   var wasArr = Array.isArray(j);
@@ -551,18 +552,23 @@ function chkParse(text){
       if (it && typeof it === "object") { list.push(it); keys.push(null); }
     });
   } else if (j && typeof j === "object") {
-    var numeric = j.hasOwnProperty("0") && !j.hasOwnProperty("bookSourceUrl") && !j.hasOwnProperty("sourceUrl");
-    Object.keys(j).forEach(function(k){
-      var it = j[k];
-      if (!(it && typeof it === "object")) return;
-      if (numeric) {
-        if (!(/^\d+$/.test(k))) return;
-        list.push(it); keys.push(null);
-      } else {
-        if (!it.sourceUrl && !it.bookSourceUrl) return;
-        list.push(it); keys.push(k);
-      }
-    });
+    // 单源直接对象（{sourceUrl...}，无外层站点名包裹）
+    if (j.sourceUrl || j.bookSourceUrl) {
+      list = [j]; keys = [null];
+    } else {
+      var numeric = j.hasOwnProperty("0") && !j.hasOwnProperty("bookSourceUrl") && !j.hasOwnProperty("sourceUrl");
+      Object.keys(j).forEach(function(k){
+        var it = j[k];
+        if (!(it && typeof it === "object")) return;
+        if (numeric) {
+          if (!(/^\d+$/.test(k))) return;
+          list.push(it); keys.push(null);
+        } else {
+          if (!it.sourceUrl && !it.bookSourceUrl) return;
+          list.push(it); keys.push(k);
+        }
+      });
+    }
   }
   list.forEach(function(o, i){
     var u = String(o.bookSourceUrl || o.sourceUrl || "").trim();
