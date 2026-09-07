@@ -580,40 +580,44 @@ function chkParse(text){
 }
 
 function chkProbe(url){
-  // 经公共代理解析上游状态码；直连受 CORS 无法取状态码故跳过
+  // 网页端受 CORS 限制拿不到直连状态码，只能经公共代理（可用性依赖第三方，网络受限时可能很慢）。
+  // 通道优先级：allorigins/get（一次返回状态码+最终URL，兼带迁移检测）→ allorigins/raw → corsproxy
   var targets = [
-    "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(url),
-    "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
-    "https://corsproxy.io/?url=" + encodeURIComponent(url)
+    function () {
+      return fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(url)).then(function (r) { return r.json(); })
+        .then(function (env) {
+          var st = env && env.status;
+          if (!st || !st.http_code) throw new Error("bad envelope");
+          var fu = st.url && st.url !== url ? st.url : null;
+          return { code: st.http_code, finalUrl: fu };
+        });
+    },
+    function () {
+      return fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(url)).then(function (r) {
+        return { code: r.status, finalUrl: null };
+      });
+    },
+    function () {
+      return fetch("https://corsproxy.io/?url=" + encodeURIComponent(url)).then(function (r) {
+        return { code: r.status, finalUrl: null };
+      });
+    }
   ];
   var i = 0;
-  function once(){
+  function once() {
     if (i >= targets.length) return Promise.reject(new Error("全部通道失败"));
     var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
-    var timer = ctrl ? setTimeout(function(){ try{ctrl.abort();}catch(e){} }, 15000) : null;
-    return fetch(targets[i], { redirect: "follow" }).then(function(resp){
-      if (timer) clearTimeout(timer);
-      var code = resp.status;
-      var moved = resp.redirected && resp.ok;
-      if (!resp.ok && (code === 401 || code === 403 || code === 429)) return {state:CHK_BLOCKED, code:code};
-      if (!resp.ok && (code === 404 || code === 410 || code >= 500)) return {state:CHK_DEAD, code:code};
-      if (!resp.ok) return {state:CHK_DEAD, code:code};
-      var base = { state: moved ? CHK_MOVED : CHK_OK, code: code };
-      if (!moved) return base;
-      // 迁移：经 allorigins 信封取最终 URL（status.url），失败则留空由导出保留原址
-      return fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(url))
-        .then(function(r2){ return r2.json(); })
-        .then(function(env){
-          var f = env && env.status && env.status.url;
-          if (f && f !== url) base.fixUrl = f;
-          return base;
-        }).catch(function(){ return base; });
-    }).catch(function(err){
-      if (timer) clearTimeout(timer);
-      return once();
-    });
+    var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 8000) : null;
+    return targets[i++]().then(function (res) { if (timer) clearTimeout(timer); return res; },
+      function () { if (timer) clearTimeout(timer); return once(); });
   }
-  return once();
+  return once().then(function (res) {
+    var code = res.code, finalUrl = res.finalUrl;
+    if (code >= 200 && code < 300) return { state: finalUrl ? CHK_MOVED : CHK_OK, code: code, fixUrl: finalUrl || "" };
+    if (code === 401 || code === 403 || code === 429) return { state: CHK_BLOCKED, code: code, fixUrl: "" };
+    if (code === 404 || code === 410 || code >= 500) return { state: CHK_DEAD, code: code, fixUrl: "" };
+    return { state: CHK_DEAD, code: code, fixUrl: "" };
+  }).catch(function () { return { state: CHK_UNKNOWN, code: -1, fixUrl: "" }; });
 }
 
 $("chkFile").addEventListener("change", function(ev){
@@ -656,6 +660,7 @@ function chkStart(){
       chkSetStats("订阅链接解析失败：" + err, "err");
     });
   } else proceed(text);
+  chkSetStats("⏳ 网页端经公共代理解析，网络受限时可能较慢；大量书源建议用 Android App 原生检测…", "");
 }
 function runChk(pkg){
   window.__chkPkg = pkg;
