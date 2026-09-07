@@ -624,7 +624,7 @@ $("chkFile").addEventListener("change", function(ev){
       return;
     }
     $("chkInput").value = txt;
-    chkStart();
+    chkSetStats("已载入 " + f.name + "（" + txt.length + " 字符），点「开始检测」", "ok");
   };
   rd.onerror = function(){ chkSetStats("读取文件失败", "err"); };
   rd.readAsArrayBuffer(f);
@@ -675,8 +675,8 @@ function runChk(pkg){
     chkSetStats("共 " + pkg.entries.length + " · 有效 " + c[1] + " · 迁移 " + c[2]
         + " · 疑似 " + c[3] + " · 失效 " + c[4] + (c[5] ? " · 未配置 " + c[5] : "")
         + (c[6] ? " · 未判定 " + c[6] : "") + "   [探测 " + done + "/" + totalU + "]");
-    $("chkExpOkBtn").disabled = !(c[1]||c[2]||c[3]);
-    $("chkExpFixBtn").disabled = !c[2];
+    if ($("chkExpOkBtn")) $("chkExpOkBtn").disabled = !(c[1]||c[2]||c[3]);
+    if ($("chkExpFixBtn")) $("chkExpFixBtn").disabled = !c[2];
   }
   upd();
   var idx = 0;
@@ -686,27 +686,39 @@ function runChk(pkg){
     if (idx >= urls.length) return Promise.resolve();
     var url = urls[idx++];
     return chkProbe(url).then(function(res){
-      done++;
-      uniq[url].forEach(function(e){
-        e.state = res.state; e.code = res.code;
-        if (res.state === CHK_MOVED) { e.err = ""; e.fixUrl = res.fixUrl || ""; }
-        applyChkRow(e.rowEl, e);
-      });
-      upd();
+      try {
+        done++;
+        uniq[url].forEach(function(e){
+          e.state = res.state; e.code = res.code;
+          if (res.state === CHK_MOVED) { e.err = ""; e.fixUrl = res.fixUrl || ""; }
+          applyChkRow(e.rowEl, e);
+        });
+        upd();
+      } catch (e) {}
       return worker();
     }).catch(function(){
-      done++;
-      uniq[url].forEach(function(e){ e.state = CHK_UNKNOWN; applyChkRow(e.rowEl, e); });
-      upd();
+      try {
+        done++;
+        uniq[url].forEach(function(e){ e.state = CHK_UNKNOWN; applyChkRow(e.rowEl, e); });
+        upd();
+      } catch (e) {}
       return worker();
     });
   }
   var ws = [];
-  for (var w = 0; w < Math.min(CONC, urls.length); w++) ws.push(worker());
-  Promise.all(ws).then(function(){
-    chkRunning2 = false; $("chkStartBtn").disabled = false;
+  var unlock = function(){
+    chkRunning2 = false;
+    var b = $("chkStartBtn");
+    if (b) b.disabled = false;
     if (chkStopFlag) st.textContent += "（已停止）";
-  });
+  };
+  try {
+    for (var w = 0; w < Math.min(CONC, urls.length); w++) ws.push(worker());
+    Promise.all(ws).then(unlock, unlock);
+  } catch (e) {
+    unlock();
+    chkSetStats("检测异常：" + e.message, "err");
+  }
 }
 function applyChkRow(el, e){
   var detail = "";
